@@ -5,7 +5,7 @@
 Use this first. It is faster and gives you real user feedback before the community plugin review.
 
 1. Push the repo to `https://github.com/lmachineone/obsidian-playbook-graph`.
-2. Create a release whose tag matches `manifest.json` exactly, for example `0.1.0`.
+2. Create a release whose tag matches `manifest.json` exactly, for example `0.2.0-beta.1`.
 3. Attach these files as release assets:
    - `manifest.json`
    - `main.js`
@@ -36,13 +36,23 @@ Once the beta is stable:
 ## Version Bumps
 
 1. Update `manifest.json`.
-2. Update `versions.json` only when `minAppVersion` changes.
+2. Update `versions.json` with the new plugin version and minimum Obsidian app version.
 3. Commit the change.
 4. Tag the exact version:
 
 ```bash
-git tag 0.1.1
+git tag 0.2.0-beta.2
 git push origin main --tags
 ```
 
 5. Create a GitHub release for that exact tag and attach `manifest.json`, `main.js`, and `styles.css`.
+
+## Beta Versioning
+
+`0.1.0` is the initial public prototype. Gemini-backed iterations use the `0.2.0-beta.N` lane:
+
+- `0.2.0-beta.1`: first Gemini API-key beta
+- `0.2.0-beta.2`: next compatibility or UX beta
+- `0.2.0`: official community-submission candidate
+
+Do not submit prerelease tags to the official Obsidian community plugin directory. Use BRAT or manual installation for beta releases.

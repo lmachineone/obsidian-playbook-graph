@@ -2,7 +2,12 @@
 
 Playbook Graph is an Obsidian plugin that renders Markdown notes as an 8D visual graph.
 
-The plugin uses a local deterministic projection today:
+The plugin supports two source-vector modes:
+
+- Local deterministic projection, useful for instant offline previews.
+- Gemini API embeddings, useful for semantic note placement during beta testing.
+
+Both modes render the same 8D visual contract:
 
 - `x`, `y`, `z`: 3D position
 - `r`, `g`, `b`: note color
@@ -13,9 +18,11 @@ The source vector is intentionally separate from the visual vector. Retrieval-qu
 
 ## Current Status
 
-This is a working first plugin, not an Obsidian core graph patch.
+This is a working beta plugin, not an Obsidian core graph patch.
 
 Obsidian's supported plugin path is to create a custom view. Replacing or altering the built-in graph viewer depends on internal, unsupported surfaces, so this repo starts with a separate graph view and keeps the visual contract portable.
+
+The beta track is `0.2.0-beta.N`. The first public prototype was `0.1.0`; Gemini-backed iterations should stay prerelease until `0.2.0` is ready.
 
 ## Install Locally
 
@@ -47,7 +54,10 @@ ln -s /Users/hariseldon/dev/obsidian-playbook-graph "/path/to/Your Vault/.obsidi
 - `Scan folder`: limits the graph to one folder, such as `digested` or `agenda`.
 - `Excluded folders`: defaults to `private_raw` so raw sources do not appear.
 - `Max files`: caps the number of Markdown files scanned per render.
-- `Source dimensions`: switches the mocked source-vector size between `128`, `768`, and `1536`.
+- `Source dimensions`: switches the source-vector size between `768`, `1536`, and `3072`; Gemini mode should usually stay at `768`.
+- `Use Gemini API embeddings`: sends scanned Markdown note text to Gemini and renders the resulting projection.
+- `Gemini API key`: stored locally in Obsidian's plugin `data.json`; never commit it.
+- `Gemini model`: first beta supports Gemini only, defaulting to `gemini-embedding-2`.
 - `Auto rotate`: keeps the graph moving when idle.
 
 ## Release Files
@@ -58,14 +68,20 @@ Obsidian installs community plugins from GitHub release assets. Each release sho
 - `main.js`
 - `styles.css`
 
-Keep the GitHub release tag exactly equal to the version in `manifest.json`, for example `0.1.0`, with no `v` prefix.
+Keep the GitHub release tag exactly equal to the version in `manifest.json`, for example `0.2.0-beta.1`, with no `v` prefix.
+
+## Gemini Privacy Boundary
+
+Gemini mode sends the scanned Markdown text to the Gemini API. Keep `private_raw` excluded and scope `Scan folder` tightly when graphing private product playbooks.
+
+The API key is stored by Obsidian in local plugin data. It is not tracked by git, not included in releases, and not printed by this plugin.
 
 ## Future Direction
 
-The next serious version should add a sidecar vector index loader:
+A later version should add a sidecar vector index loader:
 
 ```text
 .obsidian/plugins/playbook-graph/vector-index.json
 ```
 
-That file can contain Gemini-generated `768D` vectors and a precomputed `8D` projection per Markdown path. The plugin should render the projection, not call external embedding APIs from inside Obsidian.
+That file can contain Gemini-generated `768D` vectors and a precomputed `8D` projection per Markdown path. The plugin can then render cached projections without sending note text during normal graph use.

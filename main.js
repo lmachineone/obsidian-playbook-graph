@@ -1,4 +1,4 @@
-const { ItemView, Notice, Plugin, PluginSettingTab, Setting, TFile } = require("obsidian");
+const { ItemView, Notice, Plugin, PluginSettingTab, requestUrl, Setting, TFile } = require("obsidian");
 
 const VIEW_TYPE = "playbook-graph-view";
 
@@ -8,6 +8,10 @@ const DEFAULT_SETTINGS = {
   maxFiles: 300,
   maxCharactersPerFile: 10000,
   sourceDimensions: 768,
+  useGemini: false,
+  geminiApiKey: "",
+  geminiModel: "gemini-embedding-2",
+  geminiCache: {},
   autoRotate: true,
   projectionRadius: 1,
 };
@@ -43,6 +47,16 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
       id: "rescan-playbook-graph",
       name: "Rescan Playbook Graph",
       callback: () => this.refreshVisibleViews(),
+    });
+
+    this.addCommand({
+      id: "clear-gemini-embedding-cache",
+      name: "Clear Gemini Embedding Cache",
+      callback: async () => {
+        this.settings.geminiCache = {};
+        await this.saveSettings({ refresh: true });
+        new Notice("Playbook Graph Gemini cache cleared.");
+      },
     });
 
     this.addSettingTab(new PlaybookGraphSettingTab(this.app, this));
@@ -84,11 +98,14 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (!this.settings.geminiCache || typeof this.settings.geminiCache !== "object") {
+      this.settings.geminiCache = {};
+    }
   }
 
-  async saveSettings() {
+  async saveSettings(options = {}) {
     await this.saveData(this.settings);
-    this.refreshVisibleViews();
+    if (options.refresh !== false) this.refreshVisibleViews();
   }
 
   refreshVisibleViewsDebounced() {
@@ -143,9 +160,9 @@ class PlaybookGraphView extends ItemView {
           <div class="playbook-graph-controls">
             <button class="playbook-graph-rescan" type="button">Rescan</button>
             <select class="playbook-graph-dimensions" aria-label="Source dimensions">
-              <option value="128">128D source</option>
               <option value="768">768D source</option>
               <option value="1536">1536D source</option>
+              <option value="3072">3072D source</option>
             </select>
           </div>
           <div class="playbook-graph-metrics">
@@ -241,13 +258,89 @@ class PlaybookGraphView extends ItemView {
       }
     }
 
-    this.points = projectDocuments(documents, Number(settings.sourceDimensions) || 768, Number(settings.projectionRadius) || 1);
+    const radius = Number(settings.projectionRadius) || 1;
+    const dimension = Number(settings.sourceDimensions) || 768;
+
+    if (settings.useGemini && String(settings.geminiApiKey || "").trim()) {
+      try {
+        this.points = await this.projectWithGemini(documents, dimension, radius);
+      } catch (error) {
+        console.error("Playbook Graph Gemini projection failed", error);
+        new Notice("Gemini embeddings failed. Falling back to local projection.");
+        this.points = projectDocuments(documents, dimension, radius);
+      }
+    } else {
+      if (settings.useGemini) this.setStatus("Missing key");
+      this.points = projectDocuments(documents, dimension, radius);
+    }
+
     this.links = buildLinks(this.points);
     this.hovered = this.points[0] || null;
     this.updateInspector();
     this.metrics.notes.textContent = String(this.points.length);
-    this.metrics.radius.textContent = Number(settings.projectionRadius || 1).toFixed(1);
-    this.setStatus(this.points.length ? "Live" : "Empty");
+    this.metrics.radius.textContent = radius.toFixed(1);
+    const mode = settings.useGemini && String(settings.geminiApiKey || "").trim() ? "Gemini" : "Local";
+    this.setStatus(this.points.length ? mode : "Empty");
+  }
+
+  async projectWithGemini(documents, dimension, radius) {
+    const settings = this.plugin.settings;
+    const model = normalizeGeminiModel(settings.geminiModel);
+    const axisVectors = [];
+
+    this.setStatus("Axes");
+    for (const axis of AXES) {
+      const positive = await this.getGeminiEmbedding(axis.positive, `axis:${axis.id}:positive`, model, dimension);
+      const negative = await this.getGeminiEmbedding(axis.negative, `axis:${axis.id}:negative`, model, dimension);
+      axisVectors.push(normalize(positive.map((value, index) => value - negative[index])));
+    }
+
+    const items = [];
+    for (let index = 0; index < documents.length; index += 1) {
+      const doc = documents[index];
+      this.setStatus(`Gemini ${index + 1}/${documents.length}`);
+      const vector = await this.getGeminiEmbedding(doc.text, `doc:${doc.path}`, model, dimension);
+      items.push({ doc, index, vector });
+    }
+
+    await this.plugin.saveSettings({ refresh: false });
+    return projectVectorItems(items, axisVectors, radius);
+  }
+
+  async getGeminiEmbedding(text, cacheKeyHint, model, dimension) {
+    const settings = this.plugin.settings;
+    const apiKey = String(settings.geminiApiKey || "").trim();
+    const fingerprint = `${model}:${dimension}:${cacheKeyHint}:${hash32(text)}:${String(text).length}`;
+    const cached = settings.geminiCache[fingerprint];
+    if (Array.isArray(cached) && cached.length === dimension) return cached;
+
+    const response = await requestUrl({
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent`,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        model: `models/${model}`,
+        content: {
+          parts: [{ text: String(text).slice(0, this.plugin.settings.maxCharactersPerFile) }],
+        },
+        output_dimensionality: dimension,
+      }),
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Gemini embedContent failed ${response.status}: ${String(response.text || "").slice(0, 240)}`);
+    }
+
+    const payload = response.json || JSON.parse(response.text);
+    const values = extractGeminiEmbeddingValues(payload);
+    if (!Array.isArray(values) || values.length === 0) throw new Error("Gemini response did not contain embedding values.");
+
+    const normalized = normalize(values.map(Number));
+    settings.geminiCache[fingerprint] = normalized;
+    return normalized;
   }
 
   getCandidateFiles() {
@@ -503,17 +596,67 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Source dimensions")
-      .setDesc("Mock source-vector dimensionality before projection to the 8D visual contract.")
+          .setDesc("Source-vector dimensionality before projection to the 8D visual contract. Gemini mode should usually stay at 768D.")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("128", "128D")
           .addOption("768", "768D")
           .addOption("1536", "1536D")
+          .addOption("3072", "3072D")
           .setValue(String(this.plugin.settings.sourceDimensions))
           .onChange(async (value) => {
             this.plugin.settings.sourceDimensions = Number(value);
             await this.plugin.saveSettings();
           })
+      );
+
+    new Setting(containerEl)
+      .setName("Use Gemini API embeddings")
+      .setDesc("When enabled, scanned Markdown note text is sent to the Gemini API. Leave off for local deterministic projection.")
+      .addToggle((toggle) =>
+        toggle.setValue(Boolean(this.plugin.settings.useGemini)).onChange(async (value) => {
+          this.plugin.settings.useGemini = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Gemini API key")
+      .setDesc("Stored locally by Obsidian in this plugin's data.json. Never commit this value.")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        return text
+          .setPlaceholder("AIza...")
+          .setValue(this.plugin.settings.geminiApiKey ? "****************" : "")
+          .onChange(async (value) => {
+            if (/^\*+$/.test(value)) return;
+            this.plugin.settings.geminiApiKey = value.trim();
+            await this.plugin.saveSettings({ refresh: false });
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Gemini model")
+      .setDesc("Gemini API embedding model. First beta supports Gemini only.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("gemini-embedding-2", "gemini-embedding-2")
+          .addOption("gemini-embedding-001", "gemini-embedding-001")
+          .setValue(normalizeGeminiModel(this.plugin.settings.geminiModel))
+          .onChange(async (value) => {
+            this.plugin.settings.geminiModel = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Clear Gemini cache")
+      .setDesc("Removes locally cached embedding vectors. The API key is kept.")
+      .addButton((button) =>
+        button.setButtonText("Clear cache").onClick(async () => {
+          this.plugin.settings.geminiCache = {};
+          await this.plugin.saveSettings({ refresh: true });
+          new Notice("Playbook Graph Gemini cache cleared.");
+        })
       );
 
     new Setting(containerEl)
@@ -534,6 +677,24 @@ function normalizeFolder(value) {
     .replace(/\/+$/, "");
 }
 
+function normalizeGeminiModel(value) {
+  const model = String(value || DEFAULT_SETTINGS.geminiModel)
+    .trim()
+    .replace(/^models\//, "");
+  if (model === "gemini-embedding-001") return model;
+  return "gemini-embedding-2";
+}
+
+function extractGeminiEmbeddingValues(payload) {
+  const candidates = [
+    payload && payload.embedding && payload.embedding.values,
+    payload && payload.embeddings && payload.embeddings[0] && payload.embeddings[0].values,
+    payload && payload.embeddings && payload.embeddings[0] && payload.embeddings[0].embedding && payload.embeddings[0].embedding.values,
+    payload && payload.embeddings && payload.embeddings.values,
+  ];
+  return candidates.find((candidate) => Array.isArray(candidate));
+}
+
 function clampNumber(value, min, max, fallback) {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -543,12 +704,20 @@ function projectDocuments(documents, dimension, radius) {
   if (!documents.length) return [];
 
   const axes = AXES.map((axis) => makeAxis(axis, dimension));
-  const raw = documents.map((doc, index) => {
-    const embedding = textEmbedding(doc.text, dimension);
-    const dims = axes.map((axis) => dot(embedding, axis));
-    dims[6] += scoreKeywords(doc.text, "ready proof verified shipped done confidence") * 0.2;
-    dims[7] += scoreKeywords(doc.text, "urgent active risk production revenue churn blocked") * 0.28;
-    return { doc, index, dims };
+  const items = documents.map((doc, index) => {
+    return { doc, index, vector: textEmbedding(doc.text, dimension) };
+  });
+  return projectVectorItems(items, axes, radius);
+}
+
+function projectVectorItems(items, axes, radius) {
+  if (!items.length) return [];
+
+  const raw = items.map((item) => {
+    const dims = axes.map((axis) => dot(item.vector, axis));
+    dims[6] += scoreKeywords(item.doc.text, "ready proof verified shipped done confidence") * 0.2;
+    dims[7] += scoreKeywords(item.doc.text, "urgent active risk production revenue churn blocked") * 0.28;
+    return { doc: item.doc, index: item.index, dims };
   });
 
   const mins = Array(8).fill(Infinity);
