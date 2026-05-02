@@ -47,7 +47,10 @@ assert.ok(policy.calculateNodeScreenSize, "main.js must expose node screen size 
 assert.ok(policy.calculateDragRotationDelta, "main.js must expose drag rotation helper under __test");
 assert.ok(policy.calculatePanDelta, "main.js must expose drag pan helper under __test");
 assert.ok(policy.calculateWheelZoom, "main.js must expose wheel zoom helper under __test");
+assert.ok(policy.calculateLabelBoxAlpha, "main.js must expose label box alpha helper under __test");
+assert.ok(policy.calculateLabelVisibility, "main.js must expose label visibility helper under __test");
 assert.ok(policy.projectPoint, "main.js must expose point projection helper under __test");
+assert.ok(policy.truncateLabelText, "main.js must expose label truncation helper under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
 assert.ok(policy.getVisualDimensionLabels, "main.js must expose visual dimension labels under __test");
 assert.ok(policy.shouldClearEmbeddingRecordForDimension, "main.js must expose dimension clear helper under __test");
@@ -275,6 +278,20 @@ function record(overrides = {}) {
   assert.ok(policy.calculateWheelZoom(1, 100) < 1);
   assert.equal(policy.calculateWheelZoom(1, -10000), 2.8);
   assert.equal(policy.calculateWheelZoom(1, 10000), 0.45);
+}
+
+{
+  assert.equal(policy.calculateLabelVisibility(1), 0);
+  assert.equal(policy.calculateLabelVisibility(1.15), 0);
+  assert.equal(Number(policy.calculateLabelVisibility(1.45).toFixed(3)), 0.5);
+  assert.equal(policy.calculateLabelVisibility(1.75), 1);
+  assert.equal(policy.calculateLabelVisibility(2.8), 1);
+  assert.equal(policy.calculateLabelBoxAlpha(1.75), 0.75);
+}
+
+{
+  assert.equal(policy.truncateLabelText("short file", 30), "short file");
+  assert.equal(policy.truncateLabelText("abcdefghijklmnopqrstuvwxyz", 12), "abcd...vwxyz");
 }
 
 console.log("refresh policy tests passed");

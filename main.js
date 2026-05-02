@@ -14,6 +14,10 @@ const MAX_GRAPH_ZOOM = 2.8;
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 const NODE_MIN_SCREEN_SIZE = 3.5;
 const NODE_DEFAULT_MAX_SCREEN_SIZE = 9;
+const LABEL_MIN_ZOOM = 1.15;
+const LABEL_FULL_ZOOM = 1.75;
+const LABEL_BOX_MAX_ALPHA = 0.75;
+const LABEL_MAX_CHARACTERS = 42;
 
 const DEFAULT_SETTINGS = {
   scanFolder: "",
@@ -802,10 +806,16 @@ class PlaybookGraphView extends ItemView {
     }
     ctx.restore();
 
-    projected
+    const depthSorted = projected
       .slice()
-      .sort((a, b) => a.screen.depth - b.screen.depth)
-      .forEach((point) => this.drawNode(ctx, point));
+      .sort((a, b) => a.screen.depth - b.screen.depth);
+
+    depthSorted.forEach((point) => this.drawNode(ctx, point));
+
+    const labelVisibility = calculateLabelVisibility(this.zoom);
+    if (labelVisibility > 0) {
+      depthSorted.forEach((point) => this.drawNodeLabel(ctx, point, labelVisibility, width, height));
+    }
   }
 
   drawGrid(ctx, width, height) {
@@ -862,6 +872,55 @@ class PlaybookGraphView extends ItemView {
       ctx.stroke();
       ctx.restore();
     }
+  }
+
+  drawNodeLabel(ctx, point, visibility, width, height) {
+    const screen = point.screen;
+    if (!screen || screen.x < -120 || screen.x > width + 120 || screen.y < -80 || screen.y > height + 80) return;
+
+    const rawLabel = truncateLabelText(point.title || point.path || "Untitled", LABEL_MAX_CHARACTERS);
+    if (!rawLabel) return;
+
+    const boxAlpha = calculateLabelBoxAlpha(this.zoom);
+    const textAlpha = Math.min(0.95, 0.95 * visibility);
+    const borderAlpha = Math.min(0.95, 0.95 * visibility);
+    const paddingX = 8;
+    const labelHeight = 22;
+    const maxLabelWidth = 220;
+    const radius = 4;
+    const margin = 10;
+
+    ctx.save();
+    ctx.font = "12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.textBaseline = "middle";
+
+    const maxTextWidth = maxLabelWidth - paddingX * 2;
+    let label = rawLabel;
+    while (ctx.measureText(label).width > maxTextWidth && label.length > 8) {
+      label = truncateLabelText(rawLabel, label.length - 1);
+    }
+    const measured = ctx.measureText(label).width;
+    const labelWidth = Math.min(maxLabelWidth, Math.max(32, measured + paddingX * 2));
+    let x = screen.x + screen.size + 8;
+    let y = screen.y - screen.size - labelHeight - 6;
+
+    if (x + labelWidth > width - margin) x = screen.x - screen.size - labelWidth - 8;
+    if (y < margin) y = screen.y + screen.size + 6;
+    x = clampFloat(x, margin, Math.max(margin, width - labelWidth - margin), margin);
+    y = clampFloat(y, margin, Math.max(margin, height - labelHeight - margin), margin);
+
+    ctx.fillStyle = `rgba(8, 9, 9, ${boxAlpha})`;
+    drawRoundedRect(ctx, x, y, labelWidth, labelHeight, radius);
+    ctx.fill();
+
+    ctx.strokeStyle = `rgba(0, 0, 0, ${borderAlpha})`;
+    ctx.lineWidth = 1;
+    drawRoundedRect(ctx, x, y, labelWidth, labelHeight, radius);
+    ctx.stroke();
+
+    ctx.fillStyle = `rgba(244, 244, 240, ${textAlpha})`;
+    ctx.fillText(label, x + paddingX, y + labelHeight / 2);
+    ctx.restore();
   }
 }
 
@@ -1123,6 +1182,27 @@ function calculateWheelZoom(currentZoom, deltaY) {
   const current = clampFloat(currentZoom, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
   const next = current * Math.exp(-Number(deltaY || 0) * WHEEL_ZOOM_SENSITIVITY);
   return clampFloat(next, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
+}
+
+function calculateLabelVisibility(zoom) {
+  const current = clampFloat(zoom, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
+  const progress = (current - LABEL_MIN_ZOOM) / (LABEL_FULL_ZOOM - LABEL_MIN_ZOOM);
+  return clampFloat(progress, 0, 1, 0);
+}
+
+function calculateLabelBoxAlpha(zoom) {
+  return Number((calculateLabelVisibility(zoom) * LABEL_BOX_MAX_ALPHA).toFixed(3));
+}
+
+function truncateLabelText(value, maxCharacters = LABEL_MAX_CHARACTERS) {
+  const text = String(value || "").trim();
+  const limit = Math.max(8, Number(maxCharacters) || LABEL_MAX_CHARACTERS);
+  if (text.length <= limit) return text;
+
+  const available = limit - 3;
+  const prefixLength = Math.max(2, Math.floor(available / 2));
+  const suffixLength = Math.max(2, available - prefixLength);
+  return `${text.slice(0, prefixLength)}...${text.slice(-suffixLength)}`;
 }
 
 function calculateNodeScreenSize(connectionCount, maxConnectionCount, maxSize) {
@@ -1523,9 +1603,26 @@ function darken(color, amount) {
   return `rgb(${mix(color.r)}, ${mix(color.g)}, ${mix(color.b)})`;
 }
 
+function drawRoundedRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 module.exports.__test = {
   applyConnectionCounts,
   buildDocumentLinks,
+  calculateLabelBoxAlpha,
+  calculateLabelVisibility,
   calculateNodeScreenSize,
   calculateDragRotationDelta,
   calculatePanDelta,
@@ -1537,4 +1634,5 @@ module.exports.__test = {
   shouldClearEmbeddingRecordForDimension,
   shouldAutoRotateNow,
   shouldRefreshEmbeddingRecord,
+  truncateLabelText,
 };
