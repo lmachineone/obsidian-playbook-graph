@@ -5,7 +5,9 @@ const EMBEDDING_RECORD_SCHEMA_VERSION = 1;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const SEVEN_DAYS_MS = 7 * DAY_MS;
+const AUTO_ROTATE_MOUSE_PAUSE_MS = 5000;
 const GEMINI_SOURCE_DIMENSIONS = [768, 1536, 3072];
+const VISUAL_DIMENSION_LABELS = ["x", "y", "z", "r", "g", "b", "light"];
 
 const DEFAULT_SETTINGS = {
   scanFolder: "",
@@ -28,7 +30,6 @@ const AXES = [
   { id: "g", positive: "customer retention support trust lifecycle", negative: "cleanup internal ci" },
   { id: "b", positive: "backend infra automation integration security", negative: "sales pricing public" },
   { id: "light", positive: "confidence ready proof done verified", negative: "risk uncertain blocked" },
-  { id: "bloom", positive: "urgent active risk production revenue churn", negative: "done meta cleanup" },
 ];
 
 module.exports = class PlaybookGraphPlugin extends Plugin {
@@ -258,6 +259,10 @@ class PlaybookGraphView extends ItemView {
     this.animationFrame = 0;
     this.resizeObserver = null;
     this.loadTimer = 0;
+    this.lastMouseInteractionAt = 0;
+    this.isDragging = false;
+    this.lastDragPoint = null;
+    this.suppressNextClick = false;
   }
 
   getViewType() {
@@ -281,7 +286,7 @@ class PlaybookGraphView extends ItemView {
       <div class="playbook-graph-stage">
         <canvas class="playbook-graph-canvas" aria-label="Playbook Graph"></canvas>
         <div class="playbook-graph-hud">
-          <div class="playbook-graph-kicker">8D note projection</div>
+          <div class="playbook-graph-kicker">7D note projection</div>
           <div class="playbook-graph-title-row">
             <div class="playbook-graph-title">Playbook Graph</div>
             <button class="playbook-graph-settings" type="button" aria-label="Open Playbook Graph settings" title="Settings"></button>
@@ -296,7 +301,7 @@ class PlaybookGraphView extends ItemView {
           </div>
           <div class="playbook-graph-metrics">
             <div><span>Notes</span><strong data-metric="notes">0</strong></div>
-            <div><span>Projection</span><strong>8D</strong></div>
+            <div><span>Projection</span><strong>7D</strong></div>
             <div><span>Radius</span><strong data-metric="radius">1.0</strong></div>
             <div><span>Status</span><strong data-metric="status">Idle</strong></div>
           </div>
@@ -304,7 +309,7 @@ class PlaybookGraphView extends ItemView {
             <span><i style="--swatch:#ff5a7a"></i>Revenue</span>
             <span><i style="--swatch:#77e0a5"></i>Customer</span>
             <span><i style="--swatch:#7aa7ff"></i>Infra</span>
-            <span><i style="--swatch:#f7f4ea"></i>Light and bloom</span>
+            <span><i style="--swatch:#f7f4ea"></i>Light</span>
           </div>
         </div>
         <div class="playbook-graph-inspector">
@@ -338,13 +343,24 @@ class PlaybookGraphView extends ItemView {
       await this.plugin.saveSettings();
     });
     this.registerDomEvent(this.canvas, "mousemove", (evt) => this.onPointerMove(evt));
+    this.registerDomEvent(this.canvas, "mousedown", (evt) => this.onPointerDown(evt));
+    this.registerDomEvent(window, "mouseup", () => this.onPointerUp());
     this.registerDomEvent(this.canvas, "mouseleave", () => {
       this.pointer = { x: -9999, y: -9999 };
       this.hovered = null;
+      this.onPointerUp();
     });
-    this.registerDomEvent(this.canvas, "click", () => this.openHoveredFile());
+    this.registerDomEvent(this.canvas, "click", () => {
+      this.markMouseInteraction();
+      if (this.suppressNextClick) {
+        this.suppressNextClick = false;
+        return;
+      }
+      this.openHoveredFile();
+    });
     this.registerDomEvent(this.canvas, "wheel", (evt) => {
       evt.preventDefault();
+      this.markMouseInteraction();
       this.rotation.y += evt.deltaX * 0.002;
       this.rotation.x += evt.deltaY * 0.002;
     });
@@ -550,12 +566,11 @@ class PlaybookGraphView extends ItemView {
         provider: "gemini",
         model,
         dimensions: dimension,
-        projection8d: point.dims,
+        projection7d: point.dims,
         visual: {
           position: point.position,
           color: point.color,
           light: point.dims[6],
-          bloom: point.dims[7],
         },
         updatedAt: nowIso,
       });
@@ -626,16 +641,46 @@ class PlaybookGraphView extends ItemView {
   }
 
   onPointerMove(evt) {
+    this.markMouseInteraction();
     const rect = this.canvas.getBoundingClientRect();
     this.pointer = {
       x: evt.clientX - rect.left,
       y: evt.clientY - rect.top,
     };
+    if (this.isDragging && this.lastDragPoint) {
+      const dx = this.pointer.x - this.lastDragPoint.x;
+      const dy = this.pointer.y - this.lastDragPoint.y;
+      if (Math.hypot(dx, dy) > 3) this.suppressNextClick = true;
+      this.rotation.y += dx * 0.006;
+      this.rotation.x += dy * 0.006;
+      this.lastDragPoint = { ...this.pointer };
+    }
     const next = this.findNearestPoint();
     if (next !== this.hovered) {
       this.hovered = next;
       this.updateInspector();
     }
+  }
+
+  onPointerDown(evt) {
+    this.markMouseInteraction();
+    const rect = this.canvas.getBoundingClientRect();
+    this.isDragging = true;
+    this.lastDragPoint = {
+      x: evt.clientX - rect.left,
+      y: evt.clientY - rect.top,
+    };
+  }
+
+  onPointerUp() {
+    if (!this.isDragging) return;
+    this.markMouseInteraction();
+    this.isDragging = false;
+    this.lastDragPoint = null;
+  }
+
+  markMouseInteraction() {
+    this.lastMouseInteractionAt = Date.now();
   }
 
   openHoveredFile() {
@@ -669,7 +714,7 @@ class PlaybookGraphView extends ItemView {
     this.inspectorTitle.textContent = this.hovered.title;
     this.inspectorPath.textContent = this.hovered.path;
     this.dimsEl.replaceChildren();
-    const labels = ["x", "y", "z", "r", "g", "b", "light", "bloom"];
+    const labels = getVisualDimensionLabels();
     labels.forEach((label, index) => {
       const el = document.createElement("div");
       el.className = "playbook-graph-dim";
@@ -681,7 +726,9 @@ class PlaybookGraphView extends ItemView {
   renderLoop() {
     this.animationFrame = requestAnimationFrame(() => this.renderLoop());
     if (!this.ctx) return;
-    if (this.plugin.settings.autoRotate) this.rotation.y += 0.0013;
+    if (shouldAutoRotateNow(this.plugin.settings.autoRotate, this.lastMouseInteractionAt, Date.now())) {
+      this.rotation.y += 0.0013;
+    }
     this.draw();
   }
 
@@ -752,20 +799,8 @@ class PlaybookGraphView extends ItemView {
     const color = point.color;
 
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    const aura = ctx.createRadialGradient(screen.x, screen.y, 0, screen.x, screen.y, radius * (5 + point.dims[7] * 6));
-    aura.addColorStop(0, rgba(color, 0.32 + point.dims[7] * 0.28));
-    aura.addColorStop(0.38, rgba(color, 0.1));
-    aura.addColorStop(1, rgba(color, 0));
-    ctx.fillStyle = aura;
-    ctx.beginPath();
-    ctx.arc(screen.x, screen.y, radius * (5 + point.dims[7] * 6), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    ctx.save();
     ctx.shadowColor = rgb(color);
-    ctx.shadowBlur = 16 + point.dims[7] * 32;
+    ctx.shadowBlur = isHovered ? 18 : 10;
     const fill = ctx.createRadialGradient(
       screen.x - radius * 0.35,
       screen.y - radius * 0.42,
@@ -850,7 +885,7 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Source dimensions")
-      .setDesc("Source-vector dimensionality before projection to the 8D visual contract. Gemini mode should usually stay at 768D.")
+      .setDesc("Source-vector dimensionality before projection to the 7D visual contract. Gemini mode should usually stay at 768D.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("768", "768D")
@@ -980,6 +1015,17 @@ function normalizeGeminiModel(value) {
     .replace(/^models\//, "");
   if (model === "gemini-embedding-001") return model;
   return "gemini-embedding-2";
+}
+
+function getVisualDimensionLabels() {
+  return [...VISUAL_DIMENSION_LABELS];
+}
+
+function shouldAutoRotateNow(autoRotate, lastMouseInteractionAt, nowMs) {
+  if (!autoRotate) return false;
+  const lastInteraction = Number(lastMouseInteractionAt) || 0;
+  if (!lastInteraction) return true;
+  return Number(nowMs) - lastInteraction >= AUTO_ROTATE_MOUSE_PAUSE_MS;
 }
 
 function fileEmbeddingCacheKey(filePath, provider, model, dimensions) {
@@ -1156,12 +1202,11 @@ function projectVectorItems(items, axes, radius) {
   const raw = items.map((item) => {
     const dims = axes.map((axis) => dot(item.vector, axis));
     dims[6] += scoreKeywords(item.doc.text, "ready proof verified shipped done confidence") * 0.2;
-    dims[7] += scoreKeywords(item.doc.text, "urgent active risk production revenue churn blocked") * 0.28;
     return { doc: item.doc, index: item.index, dims };
   });
 
-  const mins = Array(8).fill(Infinity);
-  const maxes = Array(8).fill(-Infinity);
+  const mins = Array(VISUAL_DIMENSION_LABELS.length).fill(Infinity);
+  const maxes = Array(VISUAL_DIMENSION_LABELS.length).fill(-Infinity);
   for (const row of raw) {
     row.dims.forEach((value, index) => {
       mins[index] = Math.min(mins[index], value);
@@ -1356,6 +1401,8 @@ function darken(color, amount) {
 module.exports.__test = {
   createEmbeddingRecord,
   fileEmbeddingCacheKey,
+  getVisualDimensionLabels,
   shouldClearEmbeddingRecordForDimension,
+  shouldAutoRotateNow,
   shouldRefreshEmbeddingRecord,
 };

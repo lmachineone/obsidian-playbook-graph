@@ -1,20 +1,19 @@
 # Playbook Graph
 
-Playbook Graph is an Obsidian plugin that renders Markdown notes as an 8D visual graph.
+Playbook Graph is an Obsidian plugin that renders Markdown notes as a 7D visual graph.
 
 The plugin supports two source-vector modes:
 
 - Local deterministic projection, useful for instant offline previews.
 - Gemini API embeddings, useful for semantic note placement during beta testing.
 
-Both modes render the same 8D visual contract:
+Both modes render the same 7D visual contract:
 
 - `x`, `y`, `z`: 3D position
 - `r`, `g`, `b`: note color
 - `light`: brightness and perceived confidence
-- `bloom`: aura intensity and urgency
 
-The source vector is intentionally separate from the visual vector. Retrieval-quality embeddings should stay high-dimensional, such as Gemini `768D`; the graph should render a derived `8D` projection.
+The source vector is intentionally separate from the visual vector. Retrieval-quality embeddings should stay high-dimensional, such as Gemini `768D`; the graph should render a derived `7D` projection.
 
 ## Current Status
 
@@ -81,7 +80,7 @@ Each file embedding record stores:
 - `firstSeenAt`, `twentyFourHourSweepStartedAt`, `lastChangedAt`, `lastScannedAt`, and `lastRefreshedAt`
 - `stats.timeSinceTwentyFourHourSweepStartedMs` and `stats.timeSinceLastRefreshMs`
 - `provider`, `model`, and `dimensions`
-- `contentHash`, `embeddedContentHash`, `embedding`, and the latest `projection8d`
+- `contentHash`, `embeddedContentHash`, `embedding`, and the latest `projection7d`
 
 The embedding vector length technically reveals the dimensionality, but the cache still stores `dimensions` as metadata and includes it in the cache key. That means the same note can safely keep separate Gemini `768`, `1536`, and `3072` records without overwriting or misreading another dimension.
 

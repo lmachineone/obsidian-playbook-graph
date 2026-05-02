@@ -42,7 +42,9 @@ vm.runInNewContext(source, sandbox, { filename: "main.js" });
 const policy = sandbox.module.exports.__test;
 assert.ok(policy, "main.js must expose pure policy helpers under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
+assert.ok(policy.getVisualDimensionLabels, "main.js must expose visual dimension labels under __test");
 assert.ok(policy.shouldClearEmbeddingRecordForDimension, "main.js must expose dimension clear helper under __test");
+assert.ok(policy.shouldAutoRotateNow, "main.js must expose auto-rotation policy under __test");
 
 const base = Date.parse("2026-05-02T00:00:00.000Z");
 const oneHour = 60 * 60 * 1000;
@@ -76,7 +78,7 @@ function record(overrides = {}) {
     model: "gemini-embedding-2",
     dimensions: 768,
     embedding: [0.1, 0.2],
-    projection8d: [0, 0, 0, 0, 0, 0, 0, 0],
+    projection7d: [0, 0, 0, 0, 0, 0, 0],
     ...overrides,
   };
 }
@@ -183,6 +185,20 @@ function record(overrides = {}) {
   assert.equal(policy.shouldClearEmbeddingRecordForDimension(record({ dimensions: 1536 }), 768), false);
   assert.equal(policy.shouldClearEmbeddingRecordForDimension({ dimensions: "768" }, 768), true);
   assert.equal(policy.shouldClearEmbeddingRecordForDimension(null, 768), false);
+}
+
+{
+  assert.equal(JSON.stringify(policy.getVisualDimensionLabels()), JSON.stringify(["x", "y", "z", "r", "g", "b", "light"]));
+  assert.equal(source.includes("const aura"), false, "bloom aura should not be drawn");
+  assert.equal(source.includes("Light and bloom"), false, "bloom should not be named in the graph UI");
+}
+
+{
+  assert.equal(policy.shouldAutoRotateNow(true, 0, base), true);
+  assert.equal(policy.shouldAutoRotateNow(false, 0, base), false);
+  assert.equal(policy.shouldAutoRotateNow(true, base - 4999, base), false);
+  assert.equal(policy.shouldAutoRotateNow(true, base - 5000, base), true);
+  assert.equal(policy.shouldAutoRotateNow(true, base - 7000, base), true);
 }
 
 console.log("refresh policy tests passed");

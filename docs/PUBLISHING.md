@@ -28,7 +28,7 @@ Once the beta is stable:
   "id": "playbook-graph",
   "name": "Playbook Graph",
   "author": "lmachineone",
-  "description": "Render Markdown notes as an 8D semantic visual graph using position, RGB color, light, and bloom channels.",
+  "description": "Render Markdown notes as a 7D semantic visual graph using position, RGB color, and light channels.",
   "repo": "lmachineone/obsidian-playbook-graph"
 }
 ```
@@ -41,7 +41,7 @@ Once the beta is stable:
 4. Tag the exact version:
 
 ```bash
-git tag 0.2.0-beta.3
+git tag 0.2.0-beta.4
 git push origin main --tags
 ```
 
@@ -54,6 +54,7 @@ git push origin main --tags
 - `0.2.0-beta.1`: first Gemini API-key beta
 - `0.2.0-beta.2`: portable sharded JSON embedding index with per-dimension Gemini caches
 - `0.2.0-beta.3`: graph-view settings cog plus dimension-specific cache clearing
+- `0.2.0-beta.4`: remove bloom aura and pause auto-spin during mouse interaction
 - `0.2.0`: official community-submission candidate
 
 Do not submit prerelease tags to the official Obsidian community plugin directory. Use BRAT or manual installation for beta releases.
