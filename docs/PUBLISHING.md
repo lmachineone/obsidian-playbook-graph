@@ -41,7 +41,7 @@ Once the beta is stable:
 4. Tag the exact version:
 
 ```bash
-git tag 0.2.0-beta.5
+git tag 0.2.0-beta.6
 git push origin main --tags
 ```
 
@@ -56,6 +56,7 @@ git push origin main --tags
 - `0.2.0-beta.3`: graph-view settings cog plus dimension-specific cache clearing
 - `0.2.0-beta.4`: remove bloom aura and pause auto-spin during mouse interaction
 - `0.2.0-beta.5`: invert horizontal drag rotation while keeping vertical drag unchanged
+- `0.2.0-beta.6`: wheel zoom plus actual note-link edges and connection-based node sizing
 - `0.2.0`: official community-submission candidate
 
 Do not submit prerelease tags to the official Obsidian community plugin directory. Use BRAT or manual installation for beta releases.

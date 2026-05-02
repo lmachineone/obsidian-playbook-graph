@@ -56,6 +56,9 @@ ln -s /Users/hariseldon/dev/obsidian-playbook-graph "/path/to/Your Vault/.obsidi
 - `Excluded folders`: defaults to `private_raw` so raw sources do not appear.
 - `Max files`: caps the number of Markdown files scanned per render.
 - `Source dimensions`: switches the source-vector size between `768`, `1536`, and `3072`; Gemini mode should usually stay at `768`.
+- `Node max size`: caps node radius while still letting highly linked notes render larger than isolated notes.
+- `Link thickness`: controls rendered note-link stroke width.
+- `Link transparency`: controls rendered note-link opacity.
 - `Use Gemini API embeddings`: sends scanned Markdown note text to Gemini and renders the resulting projection.
 - `Gemini API key`: stored in local Obsidian plugin `data.json`, masked in settings, and never written to embedding cache records.
 - `Gemini model`: first beta supports Gemini only, defaulting to `gemini-embedding-2`.
@@ -83,6 +86,8 @@ Each file embedding record stores:
 - `contentHash`, `embeddedContentHash`, `embedding`, and the latest `projection7d`
 
 The embedding vector length technically reveals the dimensionality, but the cache still stores `dimensions` as metadata and includes it in the cache key. That means the same note can safely keep separate Gemini `768`, `1536`, and `3072` records without overwriting or misreading another dimension.
+
+Node size follows Obsidian-style graph logic: the plugin reads Obsidian's resolved note links and scales each node by total incoming and outgoing link count inside the scanned set. The rendered links are actual Markdown note links, not synthetic nearest-neighbor edges.
 
 Refresh policy:
 

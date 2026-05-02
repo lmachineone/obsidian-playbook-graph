@@ -41,7 +41,11 @@ vm.runInNewContext(source, sandbox, { filename: "main.js" });
 
 const policy = sandbox.module.exports.__test;
 assert.ok(policy, "main.js must expose pure policy helpers under __test");
+assert.ok(policy.applyConnectionCounts, "main.js must expose connection count helper under __test");
+assert.ok(policy.buildDocumentLinks, "main.js must expose document link helper under __test");
+assert.ok(policy.calculateNodeScreenSize, "main.js must expose node screen size helper under __test");
 assert.ok(policy.calculateDragRotationDelta, "main.js must expose drag rotation helper under __test");
+assert.ok(policy.calculateWheelZoom, "main.js must expose wheel zoom helper under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
 assert.ok(policy.getVisualDimensionLabels, "main.js must expose visual dimension labels under __test");
 assert.ok(policy.shouldClearEmbeddingRecordForDimension, "main.js must expose dimension clear helper under __test");
@@ -206,6 +210,50 @@ function record(overrides = {}) {
   const delta = policy.calculateDragRotationDelta(10, 8);
   assert.equal(delta.y, -0.06);
   assert.equal(delta.x, 0.048);
+}
+
+{
+  const links = policy.buildDocumentLinks(
+    [
+      { path: "a.md", index: 0 },
+      { path: "b.md", index: 1 },
+      { path: "c.md", index: 2 },
+    ],
+    {
+      "a.md": { "b.md": 1, "c.md": 2 },
+      "b.md": { "a.md": 1 },
+      "missing.md": { "a.md": 1 },
+    }
+  );
+  assert.equal(JSON.stringify(links), JSON.stringify([
+    { a: 0, b: 1, count: 2 },
+    { a: 0, b: 2, count: 2 },
+  ]));
+}
+
+{
+  const points = [{ index: 0 }, { index: 1 }, { index: 2 }];
+  const maxConnectionCount = policy.applyConnectionCounts(points, [
+    { a: 0, b: 1, count: 2 },
+    { a: 0, b: 2, count: 1 },
+  ]);
+  assert.equal(maxConnectionCount, 3);
+  assert.equal(points[0].connectionCount, 3);
+  assert.equal(points[1].connectionCount, 2);
+  assert.equal(points[2].connectionCount, 1);
+}
+
+{
+  assert.equal(policy.calculateNodeScreenSize(0, 10, 9), 3.5);
+  assert.equal(policy.calculateNodeScreenSize(10, 10, 9), 9);
+  assert.ok(policy.calculateNodeScreenSize(4, 10, 9) > policy.calculateNodeScreenSize(1, 10, 9));
+}
+
+{
+  assert.ok(policy.calculateWheelZoom(1, -100) > 1);
+  assert.ok(policy.calculateWheelZoom(1, 100) < 1);
+  assert.equal(policy.calculateWheelZoom(1, -10000), 2.8);
+  assert.equal(policy.calculateWheelZoom(1, 10000), 0.45);
 }
 
 console.log("refresh policy tests passed");

@@ -8,6 +8,12 @@ const SEVEN_DAYS_MS = 7 * DAY_MS;
 const AUTO_ROTATE_MOUSE_PAUSE_MS = 5000;
 const GEMINI_SOURCE_DIMENSIONS = [768, 1536, 3072];
 const VISUAL_DIMENSION_LABELS = ["x", "y", "z", "r", "g", "b", "light"];
+const DEFAULT_GRAPH_ZOOM = 1;
+const MIN_GRAPH_ZOOM = 0.45;
+const MAX_GRAPH_ZOOM = 2.8;
+const WHEEL_ZOOM_SENSITIVITY = 0.0015;
+const NODE_MIN_SCREEN_SIZE = 3.5;
+const NODE_DEFAULT_MAX_SCREEN_SIZE = 9;
 
 const DEFAULT_SETTINGS = {
   scanFolder: "",
@@ -20,6 +26,9 @@ const DEFAULT_SETTINGS = {
   geminiModel: "gemini-embedding-2",
   autoRotate: true,
   projectionRadius: 1,
+  nodeMaxSize: NODE_DEFAULT_MAX_SCREEN_SIZE,
+  linkThickness: 1,
+  linkOpacity: 0.16,
 };
 
 const AXES = [
@@ -144,6 +153,9 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
     delete this.settings.geminiCache;
     this.settings.sourceDimensions = normalizeSourceDimensions(this.settings.sourceDimensions);
     this.settings.geminiModel = normalizeGeminiModel(this.settings.geminiModel);
+    this.settings.nodeMaxSize = clampFloat(this.settings.nodeMaxSize, 5, 14, NODE_DEFAULT_MAX_SCREEN_SIZE);
+    this.settings.linkThickness = clampFloat(this.settings.linkThickness, 0.2, 4, 1);
+    this.settings.linkOpacity = clampFloat(this.settings.linkOpacity, 0.03, 0.8, 0.16);
   }
 
   async saveSettings(options = {}) {
@@ -256,6 +268,7 @@ class PlaybookGraphView extends ItemView {
     this.pointer = { x: -9999, y: -9999 };
     this.hovered = null;
     this.rotation = { x: -0.48, y: 0.72 };
+    this.zoom = DEFAULT_GRAPH_ZOOM;
     this.animationFrame = 0;
     this.resizeObserver = null;
     this.loadTimer = 0;
@@ -302,7 +315,7 @@ class PlaybookGraphView extends ItemView {
           <div class="playbook-graph-metrics">
             <div><span>Notes</span><strong data-metric="notes">0</strong></div>
             <div><span>Projection</span><strong>7D</strong></div>
-            <div><span>Radius</span><strong data-metric="radius">1.0</strong></div>
+            <div><span>Links</span><strong data-metric="links">0</strong></div>
             <div><span>Status</span><strong data-metric="status">Idle</strong></div>
           </div>
           <div class="playbook-graph-legend">
@@ -325,7 +338,7 @@ class PlaybookGraphView extends ItemView {
     this.ctx = this.canvas.getContext("2d");
     this.metrics = {
       notes: root.querySelector('[data-metric="notes"]'),
-      radius: root.querySelector('[data-metric="radius"]'),
+      links: root.querySelector('[data-metric="links"]'),
       status: root.querySelector('[data-metric="status"]'),
     };
     this.inspectorTitle = root.querySelector(".playbook-graph-inspector-title");
@@ -361,8 +374,7 @@ class PlaybookGraphView extends ItemView {
     this.registerDomEvent(this.canvas, "wheel", (evt) => {
       evt.preventDefault();
       this.markMouseInteraction();
-      this.rotation.y += evt.deltaX * 0.002;
-      this.rotation.x += evt.deltaY * 0.002;
+      this.zoom = calculateWheelZoom(this.zoom, evt.deltaY);
     });
 
     this.resizeObserver = new ResizeObserver(() => this.resizeCanvas());
@@ -428,11 +440,12 @@ class PlaybookGraphView extends ItemView {
       this.points = projectDocuments(documents, dimension, radius);
     }
 
-    this.links = buildLinks(this.points);
+    this.links = buildDocumentLinks(this.points, this.app.metadataCache && this.app.metadataCache.resolvedLinks);
+    this.maxConnectionCount = applyConnectionCounts(this.points, this.links);
     this.hovered = this.points[0] || null;
     this.updateInspector();
     this.metrics.notes.textContent = String(this.points.length);
-    this.metrics.radius.textContent = radius.toFixed(1);
+    this.metrics.links.textContent = String(this.links.length);
     const mode = settings.useGemini && String(settings.geminiApiKey || "").trim() ? "Gemini" : "Local";
     this.setStatus(this.points.length ? mode : "Empty");
   }
@@ -748,19 +761,23 @@ class PlaybookGraphView extends ItemView {
 
     this.drawGrid(ctx, width, height);
 
+    const nodeMaxSize = clampFloat(this.plugin.settings.nodeMaxSize, 5, 14, NODE_DEFAULT_MAX_SCREEN_SIZE);
     const projected = this.points.map((point) => {
-      const screen = projectPoint(point.position, this.rotation, width, height);
+      const screen = projectPoint(point.position, this.rotation, width, height, this.zoom);
+      screen.size = calculateNodeScreenSize(point.connectionCount || 0, this.maxConnectionCount || 0, nodeMaxSize);
       point.screen = screen;
       return point;
     });
 
     ctx.save();
-    ctx.lineWidth = 1;
+    const linkThickness = clampFloat(this.plugin.settings.linkThickness, 0.2, 4, 1);
+    const linkOpacity = clampFloat(this.plugin.settings.linkOpacity, 0.03, 0.8, 0.16);
     for (const link of this.links) {
       const a = projected[link.a];
       const b = projected[link.b];
       if (!a || !b || !a.screen || !b.screen) continue;
-      ctx.strokeStyle = "rgba(247, 244, 234, 0.13)";
+      ctx.lineWidth = linkThickness * Math.min(2.4, Math.max(1, Math.sqrt(link.count || 1)));
+      ctx.strokeStyle = `rgba(247, 244, 234, ${linkOpacity})`;
       ctx.beginPath();
       ctx.moveTo(a.screen.x, a.screen.y);
       ctx.lineTo(b.screen.x, b.screen.y);
@@ -900,6 +917,48 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Node max size")
+      .setDesc("Maximum node radius. Actual size follows each note's incoming and outgoing link count.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(5, 14, 0.5)
+          .setValue(clampFloat(this.plugin.settings.nodeMaxSize, 5, 14, NODE_DEFAULT_MAX_SCREEN_SIZE))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.nodeMaxSize = clampFloat(value, 5, 14, NODE_DEFAULT_MAX_SCREEN_SIZE);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Link thickness")
+      .setDesc("Base stroke width for note links.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(0.2, 4, 0.1)
+          .setValue(clampFloat(this.plugin.settings.linkThickness, 0.2, 4, 1))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.linkThickness = clampFloat(value, 0.2, 4, 1);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Link transparency")
+      .setDesc("Opacity for visible note links.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(0.03, 0.8, 0.01)
+          .setValue(clampFloat(this.plugin.settings.linkOpacity, 0.03, 0.8, 0.16))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.linkOpacity = clampFloat(value, 0.03, 0.8, 0.16);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Use Gemini API embeddings")
       .setDesc("When enabled, scanned Markdown note text is sent to the Gemini API. Leave off for local deterministic projection.")
       .addToggle((toggle) =>
@@ -1034,6 +1093,22 @@ function calculateDragRotationDelta(dx, dy) {
     y: -dx * 0.006,
     x: dy * 0.006,
   };
+}
+
+function calculateWheelZoom(currentZoom, deltaY) {
+  const current = clampFloat(currentZoom, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
+  const next = current * Math.exp(-Number(deltaY || 0) * WHEEL_ZOOM_SENSITIVITY);
+  return clampFloat(next, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
+}
+
+function calculateNodeScreenSize(connectionCount, maxConnectionCount, maxSize) {
+  const max = clampFloat(maxSize, 5, 14, NODE_DEFAULT_MAX_SCREEN_SIZE);
+  const count = Math.max(0, Number(connectionCount) || 0);
+  const maxCount = Math.max(0, Number(maxConnectionCount) || 0);
+  if (!maxCount || !count) return NODE_MIN_SCREEN_SIZE;
+
+  const ratio = Math.sqrt(count) / Math.sqrt(maxCount);
+  return NODE_MIN_SCREEN_SIZE + (max - NODE_MIN_SCREEN_SIZE) * Math.min(1, ratio);
 }
 
 function fileEmbeddingCacheKey(filePath, provider, model, dimensions) {
@@ -1194,6 +1269,12 @@ function clampNumber(value, min, max, fallback) {
   return Math.max(min, Math.min(max, Math.round(value)));
 }
 
+function clampFloat(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
 function projectDocuments(documents, dimension, radius) {
   if (!documents.length) return [];
 
@@ -1243,31 +1324,41 @@ function projectVectorItems(items, axes, radius) {
   });
 }
 
-function buildLinks(points) {
-  const links = [];
-  const seen = new Set();
-  for (const point of points) {
-    const neighbors = points
-      .filter((candidate) => candidate !== point)
-      .map((candidate) => ({
-        index: candidate.index,
-        distance: distance3(point.position, candidate.position),
-      }))
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, 2);
+function buildDocumentLinks(points, resolvedLinks) {
+  const byPath = new Map(points.map((point) => [point.path, point]));
+  const byPair = new Map();
 
-    for (const neighbor of neighbors) {
-      const key = [point.index, neighbor.index].sort((a, b) => a - b).join(":");
-      if (seen.has(key)) continue;
-      seen.add(key);
-      links.push({ a: point.index, b: neighbor.index });
+  for (const [sourcePath, targets] of Object.entries(resolvedLinks || {})) {
+    const source = byPath.get(sourcePath);
+    if (!source || !targets || typeof targets !== "object") continue;
+
+    for (const [targetPath, count] of Object.entries(targets)) {
+      const target = byPath.get(targetPath);
+      if (!target || target === source) continue;
+
+      const a = Math.min(source.index, target.index);
+      const b = Math.max(source.index, target.index);
+      const key = `${a}:${b}`;
+      const value = Math.max(1, Number(count) || 1);
+      const existing = byPair.get(key);
+      if (existing) existing.count += value;
+      else byPair.set(key, { a, b, count: value });
     }
   }
-  return links;
+
+  return Array.from(byPair.values()).sort((left, right) => left.a - right.a || left.b - right.b);
 }
 
-function distance3(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+function applyConnectionCounts(points, links) {
+  for (const point of points) point.connectionCount = 0;
+
+  for (const link of links) {
+    const count = Math.max(1, Number(link.count) || 1);
+    if (points[link.a]) points[link.a].connectionCount += count;
+    if (points[link.b]) points[link.b].connectionCount += count;
+  }
+
+  return points.reduce((max, point) => Math.max(max, point.connectionCount || 0), 0);
 }
 
 function normalizeRange(value, min, max) {
@@ -1365,7 +1456,7 @@ function dot(a, b) {
   return sum;
 }
 
-function projectPoint(position, rotation, width, height) {
+function projectPoint(position, rotation, width, height, zoom = DEFAULT_GRAPH_ZOOM) {
   const sinY = Math.sin(rotation.y);
   const cosY = Math.cos(rotation.y);
   const sinX = Math.sin(rotation.x);
@@ -1378,13 +1469,13 @@ function projectPoint(position, rotation, width, height) {
 
   const focal = 4.2;
   const scale = focal / (focal + z2 + 1.8);
-  const unit = Math.min(width, height) * 0.32;
+  const unit = Math.min(width, height) * 0.32 * clampFloat(zoom, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
 
   return {
     x: width * 0.5 + x1 * unit * scale,
     y: height * 0.54 - y1 * unit * scale,
     depth: z2,
-    size: Math.max(7, 12 + scale * 15),
+    size: NODE_MIN_SCREEN_SIZE,
   };
 }
 
@@ -1407,7 +1498,11 @@ function darken(color, amount) {
 }
 
 module.exports.__test = {
+  applyConnectionCounts,
+  buildDocumentLinks,
+  calculateNodeScreenSize,
   calculateDragRotationDelta,
+  calculateWheelZoom,
   createEmbeddingRecord,
   fileEmbeddingCacheKey,
   getVisualDimensionLabels,
