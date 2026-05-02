@@ -651,8 +651,9 @@ class PlaybookGraphView extends ItemView {
       const dx = this.pointer.x - this.lastDragPoint.x;
       const dy = this.pointer.y - this.lastDragPoint.y;
       if (Math.hypot(dx, dy) > 3) this.suppressNextClick = true;
-      this.rotation.y += dx * 0.006;
-      this.rotation.x += dy * 0.006;
+      const delta = calculateDragRotationDelta(dx, dy);
+      this.rotation.y += delta.y;
+      this.rotation.x += delta.x;
       this.lastDragPoint = { ...this.pointer };
     }
     const next = this.findNearestPoint();
@@ -1028,6 +1029,13 @@ function shouldAutoRotateNow(autoRotate, lastMouseInteractionAt, nowMs) {
   return Number(nowMs) - lastInteraction >= AUTO_ROTATE_MOUSE_PAUSE_MS;
 }
 
+function calculateDragRotationDelta(dx, dy) {
+  return {
+    y: -dx * 0.006,
+    x: dy * 0.006,
+  };
+}
+
 function fileEmbeddingCacheKey(filePath, provider, model, dimensions) {
   const dimension = normalizeSourceDimensions(dimensions);
   const id = hashHex(["file", provider, model, dimension, normalizeVaultPath(filePath)].join("\n"));
@@ -1399,6 +1407,7 @@ function darken(color, amount) {
 }
 
 module.exports.__test = {
+  calculateDragRotationDelta,
   createEmbeddingRecord,
   fileEmbeddingCacheKey,
   getVisualDimensionLabels,

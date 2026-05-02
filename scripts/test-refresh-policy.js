@@ -41,6 +41,7 @@ vm.runInNewContext(source, sandbox, { filename: "main.js" });
 
 const policy = sandbox.module.exports.__test;
 assert.ok(policy, "main.js must expose pure policy helpers under __test");
+assert.ok(policy.calculateDragRotationDelta, "main.js must expose drag rotation helper under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
 assert.ok(policy.getVisualDimensionLabels, "main.js must expose visual dimension labels under __test");
 assert.ok(policy.shouldClearEmbeddingRecordForDimension, "main.js must expose dimension clear helper under __test");
@@ -199,6 +200,12 @@ function record(overrides = {}) {
   assert.equal(policy.shouldAutoRotateNow(true, base - 4999, base), false);
   assert.equal(policy.shouldAutoRotateNow(true, base - 5000, base), true);
   assert.equal(policy.shouldAutoRotateNow(true, base - 7000, base), true);
+}
+
+{
+  const delta = policy.calculateDragRotationDelta(10, 8);
+  assert.equal(delta.y, -0.06);
+  assert.equal(delta.x, 0.048);
 }
 
 console.log("refresh policy tests passed");
