@@ -1,0 +1,10 @@
+{
+  "id": "playbook-graph",
+  "name": "Playbook Graph",
+  "version": "0.1.0",
+  "minAppVersion": "1.7.2",
+  "description": "Render Markdown notes as an 8D semantic visual graph using position, RGB color, light, and bloom channels.",
+  "author": "lmachineone",
+  "authorUrl": "https://github.com/lmachineone",
+  "isDesktopOnly": false
+}

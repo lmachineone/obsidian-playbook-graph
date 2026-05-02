@@ -1,0 +1,206 @@
+.playbook-graph-root {
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+}
+
+.playbook-graph-stage {
+  position: relative;
+  height: 100%;
+  min-height: 420px;
+  overflow: hidden;
+  background: #050706;
+}
+
+.playbook-graph-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.playbook-graph-hud,
+.playbook-graph-inspector {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid rgba(247, 244, 234, 0.16);
+  border-radius: 8px;
+  background: rgba(13, 15, 14, 0.78);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+  color: #f7f4ea;
+  backdrop-filter: blur(18px);
+}
+
+.playbook-graph-hud {
+  top: 18px;
+  left: 18px;
+  width: min(400px, calc(100% - 36px));
+  padding: 16px;
+}
+
+.playbook-graph-kicker {
+  margin-bottom: 6px;
+  color: #7bdff2;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.playbook-graph-title {
+  margin-bottom: 12px;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.08;
+}
+
+.playbook-graph-controls {
+  display: grid;
+  grid-template-columns: minmax(86px, 0.35fr) 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.playbook-graph-controls button,
+.playbook-graph-controls select {
+  min-height: 34px;
+  border: 1px solid rgba(247, 244, 234, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f7f4ea;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.playbook-graph-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.playbook-graph-metrics div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(247, 244, 234, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.playbook-graph-metrics span {
+  display: block;
+  color: #a9b0a8;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.playbook-graph-metrics strong {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playbook-graph-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(247, 244, 234, 0.14);
+}
+
+.playbook-graph-legend span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #dce2dc;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.playbook-graph-legend i {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: 0 0 16px var(--swatch);
+}
+
+.playbook-graph-inspector {
+  right: 18px;
+  bottom: 18px;
+  width: min(370px, calc(100% - 36px));
+  padding: 14px;
+}
+
+.playbook-graph-inspector-title {
+  margin-bottom: 7px;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.playbook-graph-inspector-path {
+  color: #a9b0a8;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.playbook-graph-dims {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.playbook-graph-dim {
+  min-width: 0;
+  padding: 7px 6px;
+  border: 1px solid rgba(247, 244, 234, 0.13);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #e9ede8;
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .playbook-graph-stage {
+    min-height: 100%;
+  }
+
+  .playbook-graph-hud {
+    top: 12px;
+    left: 12px;
+    width: calc(100% - 24px);
+    padding: 12px;
+  }
+
+  .playbook-graph-title {
+    font-size: 18px;
+  }
+
+  .playbook-graph-controls,
+  .playbook-graph-legend {
+    grid-template-columns: 1fr;
+  }
+
+  .playbook-graph-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .playbook-graph-inspector {
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
