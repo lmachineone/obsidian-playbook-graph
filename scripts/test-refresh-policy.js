@@ -306,8 +306,8 @@ function rounded(value) {
 {
   assert.ok(policy.calculateWheelZoom(1, -100) > 1);
   assert.ok(policy.calculateWheelZoom(1, 100) < 1);
-  assert.equal(policy.calculateWheelZoom(1, -10000), 2.8);
-  assert.equal(policy.calculateWheelZoom(1, 10000), 0.45);
+  assert.equal(policy.calculateWheelZoom(1, -10000), 24);
+  assert.equal(policy.calculateWheelZoom(1, 10000), 0.08);
 }
 
 {
@@ -316,7 +316,7 @@ function rounded(value) {
   assert.equal(Number(policy.calculateLabelVisibility(1.45).toFixed(3)), 0.5);
   assert.equal(policy.calculateLabelVisibility(1.75), 1);
   assert.equal(policy.calculateLabelVisibility(2.8), 1);
-  assert.equal(policy.calculateLabelBoxAlpha(1.75), 0.75);
+  assert.equal(policy.calculateLabelBoxAlpha(1.75), 0.55);
 }
 
 {

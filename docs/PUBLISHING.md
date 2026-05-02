@@ -41,7 +41,7 @@ Once the beta is stable:
 4. Tag the exact version:
 
 ```bash
-git tag 0.2.0-beta.10
+git tag 0.2.0-beta.11
 git push origin main --tags
 ```
 
@@ -61,6 +61,7 @@ git push origin main --tags
 - `0.2.0-beta.8`: right-click drag viewport panning
 - `0.2.0-beta.9`: zoom-gated floating file labels
 - `0.2.0-beta.10`: deterministic screen-space drag rotation
+- `0.2.0-beta.11`: wider zoom range and lighter labels
 - `0.2.0`: official community-submission candidate
 
 Do not submit prerelease tags to the official Obsidian community plugin directory. Use BRAT or manual installation for beta releases.
