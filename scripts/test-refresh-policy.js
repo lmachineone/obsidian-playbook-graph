@@ -208,7 +208,7 @@ function record(overrides = {}) {
 
 {
   const delta = policy.calculateDragRotationDelta(10, 8);
-  assert.equal(delta.y, -0.06);
+  assert.equal(delta.y, 0.06);
   assert.equal(delta.x, 0.048);
 }
 

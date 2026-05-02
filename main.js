@@ -1090,7 +1090,7 @@ function shouldAutoRotateNow(autoRotate, lastMouseInteractionAt, nowMs) {
 
 function calculateDragRotationDelta(dx, dy) {
   return {
-    y: -dx * 0.006,
+    y: dx * 0.006,
     x: dy * 0.006,
   };
 }
