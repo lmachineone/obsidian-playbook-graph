@@ -1,7 +1,7 @@
 {
   "id": "playbook-graph",
   "name": "Playbook Graph",
-  "version": "0.2.0-beta.7",
+  "version": "0.2.0-beta.8",
   "minAppVersion": "1.7.2",
   "description": "Render Markdown notes as a 7D semantic visual graph using position, RGB color, and light channels.",
   "author": "lmachineone",

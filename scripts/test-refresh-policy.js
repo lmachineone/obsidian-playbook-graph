@@ -45,7 +45,9 @@ assert.ok(policy.applyConnectionCounts, "main.js must expose connection count he
 assert.ok(policy.buildDocumentLinks, "main.js must expose document link helper under __test");
 assert.ok(policy.calculateNodeScreenSize, "main.js must expose node screen size helper under __test");
 assert.ok(policy.calculateDragRotationDelta, "main.js must expose drag rotation helper under __test");
+assert.ok(policy.calculatePanDelta, "main.js must expose drag pan helper under __test");
 assert.ok(policy.calculateWheelZoom, "main.js must expose wheel zoom helper under __test");
+assert.ok(policy.projectPoint, "main.js must expose point projection helper under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
 assert.ok(policy.getVisualDimensionLabels, "main.js must expose visual dimension labels under __test");
 assert.ok(policy.shouldClearEmbeddingRecordForDimension, "main.js must expose dimension clear helper under __test");
@@ -210,6 +212,25 @@ function record(overrides = {}) {
   const delta = policy.calculateDragRotationDelta(10, 8);
   assert.equal(delta.y, 0.06);
   assert.equal(delta.x, 0.048);
+}
+
+{
+  const delta = policy.calculatePanDelta(12, -7);
+  assert.equal(delta.x, 12);
+  assert.equal(delta.y, -7);
+}
+
+{
+  const screen = policy.projectPoint(
+    { x: 0, y: 0, z: 0 },
+    { x: 0, y: 0 },
+    100,
+    100,
+    1,
+    { x: 12, y: -7 }
+  );
+  assert.equal(screen.x, 62);
+  assert.equal(screen.y, 47);
 }
 
 {

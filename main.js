@@ -268,12 +268,14 @@ class PlaybookGraphView extends ItemView {
     this.pointer = { x: -9999, y: -9999 };
     this.hovered = null;
     this.rotation = { x: -0.48, y: 0.72 };
+    this.pan = { x: 0, y: 0 };
     this.zoom = DEFAULT_GRAPH_ZOOM;
     this.animationFrame = 0;
     this.resizeObserver = null;
     this.loadTimer = 0;
     this.lastMouseInteractionAt = 0;
     this.isDragging = false;
+    this.dragMode = null;
     this.lastDragPoint = null;
     this.suppressNextClick = false;
   }
@@ -358,12 +360,17 @@ class PlaybookGraphView extends ItemView {
     this.registerDomEvent(this.canvas, "mousemove", (evt) => this.onPointerMove(evt));
     this.registerDomEvent(this.canvas, "mousedown", (evt) => this.onPointerDown(evt));
     this.registerDomEvent(window, "mouseup", () => this.onPointerUp());
+    this.registerDomEvent(this.canvas, "contextmenu", (evt) => {
+      evt.preventDefault();
+      this.markMouseInteraction();
+    });
     this.registerDomEvent(this.canvas, "mouseleave", () => {
       this.pointer = { x: -9999, y: -9999 };
       this.hovered = null;
       this.onPointerUp();
     });
-    this.registerDomEvent(this.canvas, "click", () => {
+    this.registerDomEvent(this.canvas, "click", (evt) => {
+      if (evt.button !== 0) return;
       this.markMouseInteraction();
       if (this.suppressNextClick) {
         this.suppressNextClick = false;
@@ -663,10 +670,16 @@ class PlaybookGraphView extends ItemView {
     if (this.isDragging && this.lastDragPoint) {
       const dx = this.pointer.x - this.lastDragPoint.x;
       const dy = this.pointer.y - this.lastDragPoint.y;
-      if (Math.hypot(dx, dy) > 3) this.suppressNextClick = true;
-      const delta = calculateDragRotationDelta(dx, dy);
-      this.rotation.y += delta.y;
-      this.rotation.x += delta.x;
+      if (this.dragMode === "rotate" && Math.hypot(dx, dy) > 3) this.suppressNextClick = true;
+      if (this.dragMode === "pan") {
+        const delta = calculatePanDelta(dx, dy);
+        this.pan.x += delta.x;
+        this.pan.y += delta.y;
+      } else {
+        const delta = calculateDragRotationDelta(dx, dy);
+        this.rotation.y += delta.y;
+        this.rotation.x += delta.x;
+      }
       this.lastDragPoint = { ...this.pointer };
     }
     const next = this.findNearestPoint();
@@ -677,9 +690,12 @@ class PlaybookGraphView extends ItemView {
   }
 
   onPointerDown(evt) {
+    if (evt.button !== 0 && evt.button !== 2) return;
+    evt.preventDefault();
     this.markMouseInteraction();
     const rect = this.canvas.getBoundingClientRect();
     this.isDragging = true;
+    this.dragMode = evt.button === 2 ? "pan" : "rotate";
     this.lastDragPoint = {
       x: evt.clientX - rect.left,
       y: evt.clientY - rect.top,
@@ -690,6 +706,7 @@ class PlaybookGraphView extends ItemView {
     if (!this.isDragging) return;
     this.markMouseInteraction();
     this.isDragging = false;
+    this.dragMode = null;
     this.lastDragPoint = null;
   }
 
@@ -763,7 +780,7 @@ class PlaybookGraphView extends ItemView {
 
     const nodeMaxSize = clampFloat(this.plugin.settings.nodeMaxSize, 5, 14, NODE_DEFAULT_MAX_SCREEN_SIZE);
     const projected = this.points.map((point) => {
-      const screen = projectPoint(point.position, this.rotation, width, height, this.zoom);
+      const screen = projectPoint(point.position, this.rotation, width, height, this.zoom, this.pan);
       screen.size = calculateNodeScreenSize(point.connectionCount || 0, this.maxConnectionCount || 0, nodeMaxSize);
       point.screen = screen;
       return point;
@@ -1092,6 +1109,13 @@ function calculateDragRotationDelta(dx, dy) {
   return {
     y: dx * 0.006,
     x: dy * 0.006,
+  };
+}
+
+function calculatePanDelta(dx, dy) {
+  return {
+    x: Number(dx) || 0,
+    y: Number(dy) || 0,
   };
 }
 
@@ -1456,7 +1480,7 @@ function dot(a, b) {
   return sum;
 }
 
-function projectPoint(position, rotation, width, height, zoom = DEFAULT_GRAPH_ZOOM) {
+function projectPoint(position, rotation, width, height, zoom = DEFAULT_GRAPH_ZOOM, pan = { x: 0, y: 0 }) {
   const sinY = Math.sin(rotation.y);
   const cosY = Math.cos(rotation.y);
   const sinX = Math.sin(rotation.x);
@@ -1470,10 +1494,12 @@ function projectPoint(position, rotation, width, height, zoom = DEFAULT_GRAPH_ZO
   const focal = 4.2;
   const scale = focal / (focal + z2 + 1.8);
   const unit = Math.min(width, height) * 0.32 * clampFloat(zoom, MIN_GRAPH_ZOOM, MAX_GRAPH_ZOOM, DEFAULT_GRAPH_ZOOM);
+  const panX = Number(pan && pan.x) || 0;
+  const panY = Number(pan && pan.y) || 0;
 
   return {
-    x: width * 0.5 + x1 * unit * scale,
-    y: height * 0.54 - y1 * unit * scale,
+    x: width * 0.5 + panX + x1 * unit * scale,
+    y: height * 0.54 + panY - y1 * unit * scale,
     depth: z2,
     size: NODE_MIN_SCREEN_SIZE,
   };
@@ -1502,10 +1528,12 @@ module.exports.__test = {
   buildDocumentLinks,
   calculateNodeScreenSize,
   calculateDragRotationDelta,
+  calculatePanDelta,
   calculateWheelZoom,
   createEmbeddingRecord,
   fileEmbeddingCacheKey,
   getVisualDimensionLabels,
+  projectPoint,
   shouldClearEmbeddingRecordForDimension,
   shouldAutoRotateNow,
   shouldRefreshEmbeddingRecord,
