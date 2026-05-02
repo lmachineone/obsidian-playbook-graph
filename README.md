@@ -60,6 +60,35 @@ ln -s /Users/hariseldon/dev/obsidian-playbook-graph "/path/to/Your Vault/.obsidi
 - `Gemini model`: first beta supports Gemini only, defaulting to `gemini-embedding-2`.
 - `Auto rotate`: keeps the graph moving when idle.
 
+## Embedding Storage
+
+The API key and normal settings stay in Obsidian's local plugin `data.json`.
+
+Gemini vectors are cached as portable vault-adapter JSON, so the same plugin path works on macOS, Windows, Linux, iPad, iPhone, and Android:
+
+```text
+.obsidian/plugins/playbook-graph/index/files/<shard>/<id>.json
+.obsidian/plugins/playbook-graph/index/axes/<shard>/<id>.json
+```
+
+Each file embedding record stores:
+
+- `path`: Markdown path relative to the vault
+- `fileCreatedAt` and `fileModifiedAt`
+- `firstSeenAt`, `twentyFourHourSweepStartedAt`, `lastChangedAt`, `lastScannedAt`, and `lastRefreshedAt`
+- `stats.timeSinceTwentyFourHourSweepStartedMs` and `stats.timeSinceLastRefreshMs`
+- `provider`, `model`, and `dimensions`
+- `contentHash`, `embeddedContentHash`, `embedding`, and the latest `projection8d`
+
+The embedding vector length technically reveals the dimensionality, but the cache still stores `dimensions` as metadata and includes it in the cache key. That means the same note can safely keep separate Gemini `768`, `1536`, and `3072` records without overwriting or misreading another dimension.
+
+Refresh policy:
+
+- Missing records refresh immediately.
+- Changed files inside their first 24-hour sweep refresh at most once per hour.
+- Changed files after that sweep refresh after seven days since the last refresh.
+- Unchanged files keep using the cached embedding.
+
 ## Release Files
 
 Obsidian installs community plugins from GitHub release assets. Each release should attach:
@@ -78,10 +107,4 @@ The API key is stored by Obsidian in local plugin data. It is not tracked by git
 
 ## Future Direction
 
-A later version should add a sidecar vector index loader:
-
-```text
-.obsidian/plugins/playbook-graph/vector-index.json
-```
-
-That file can contain Gemini-generated `768D` vectors and a precomputed `8D` projection per Markdown path. The plugin can then render cached projections without sending note text during normal graph use.
+A later version can experiment with deeper Obsidian graph integration. This beta keeps the custom view isolated because the built-in graph viewer is not a stable plugin API surface.

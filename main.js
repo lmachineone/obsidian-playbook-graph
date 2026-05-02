@@ -1,6 +1,11 @@
 const { ItemView, Notice, Plugin, PluginSettingTab, requestUrl, Setting, TFile } = require("obsidian");
 
 const VIEW_TYPE = "playbook-graph-view";
+const EMBEDDING_RECORD_SCHEMA_VERSION = 1;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const SEVEN_DAYS_MS = 7 * DAY_MS;
+const GEMINI_SOURCE_DIMENSIONS = [768, 1536, 3072];
 
 const DEFAULT_SETTINGS = {
   scanFolder: "",
@@ -11,7 +16,6 @@ const DEFAULT_SETTINGS = {
   useGemini: false,
   geminiApiKey: "",
   geminiModel: "gemini-embedding-2",
-  geminiCache: {},
   autoRotate: true,
   projectionRadius: 1,
 };
@@ -53,9 +57,14 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
       id: "clear-gemini-embedding-cache",
       name: "Clear Gemini Embedding Cache",
       callback: async () => {
-        this.settings.geminiCache = {};
-        await this.saveSettings({ refresh: true });
-        new Notice("Playbook Graph Gemini cache cleared.");
+        try {
+          await this.clearEmbeddingIndex();
+          this.refreshVisibleViews();
+          new Notice("Playbook Graph embedding index cleared.");
+        } catch (error) {
+          console.warn("Playbook Graph could not clear embedding index", error);
+          new Notice("Could not clear the embedding index on this adapter.");
+        }
       },
     });
 
@@ -98,14 +107,69 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    if (!this.settings.geminiCache || typeof this.settings.geminiCache !== "object") {
-      this.settings.geminiCache = {};
-    }
+    delete this.settings.geminiCache;
+    this.settings.sourceDimensions = normalizeSourceDimensions(this.settings.sourceDimensions);
+    this.settings.geminiModel = normalizeGeminiModel(this.settings.geminiModel);
   }
 
   async saveSettings(options = {}) {
+    delete this.settings.geminiCache;
     await this.saveData(this.settings);
     if (options.refresh !== false) this.refreshVisibleViews();
+  }
+
+  getPluginFolderPath() {
+    if (this.manifest && this.manifest.dir) return normalizeVaultPath(this.manifest.dir);
+
+    const configDir = this.app && this.app.vault && this.app.vault.configDir ? this.app.vault.configDir : ".obsidian";
+    const pluginId = this.manifest && this.manifest.id ? this.manifest.id : "playbook-graph";
+    return normalizeVaultPath(`${configDir}/plugins/${pluginId}`);
+  }
+
+  getIndexPath(relativePath) {
+    return normalizeVaultPath(`${this.getPluginFolderPath()}/${relativePath}`);
+  }
+
+  async readIndexJson(relativePath) {
+    const adapter = this.app.vault.adapter;
+    const path = this.getIndexPath(relativePath);
+    if (!(await adapter.exists(path))) return null;
+
+    try {
+      return JSON.parse(await adapter.read(path));
+    } catch (error) {
+      console.warn("Playbook Graph could not read embedding index file", path, error);
+      return null;
+    }
+  }
+
+  async writeIndexJson(relativePath, value) {
+    const path = this.getIndexPath(relativePath);
+    await this.ensureFolder(path.split("/").slice(0, -1).join("/"));
+    await this.app.vault.adapter.write(path, `${JSON.stringify(value, null, 2)}\n`);
+  }
+
+  async ensureFolder(folderPath) {
+    const adapter = this.app.vault.adapter;
+    const parts = normalizeVaultPath(folderPath).split("/").filter(Boolean);
+    let current = "";
+
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      if (!(await adapter.exists(current))) await adapter.mkdir(current);
+    }
+  }
+
+  async clearEmbeddingIndex() {
+    const adapter = this.app.vault.adapter;
+    const indexPath = this.getIndexPath("index");
+    if (!(await adapter.exists(indexPath))) return;
+
+    if (typeof adapter.rmdir !== "function") {
+      throw new Error("This Obsidian adapter does not support clearing folders.");
+    }
+
+    await adapter.rmdir(indexPath, true);
   }
 
   refreshVisibleViewsDebounced() {
@@ -248,10 +312,15 @@ class PlaybookGraphView extends ItemView {
     for (const file of files) {
       try {
         const text = await this.app.vault.cachedRead(file);
+        const sourceText = `${file.basename}\n${text.slice(0, settings.maxCharactersPerFile)}`;
         documents.push({
           path: file.path,
           title: file.basename,
-          text: `${file.basename}\n${text.slice(0, settings.maxCharactersPerFile)}`,
+          text: sourceText,
+          contentHash: hashText(sourceText),
+          fileCreatedAt: isoFromMs(file.stat && file.stat.ctime),
+          fileModifiedAt: isoFromMs(file.stat && file.stat.mtime),
+          size: file.stat && Number.isFinite(file.stat.size) ? file.stat.size : 0,
         });
       } catch (error) {
         console.warn("Playbook Graph could not read file", file.path, error);
@@ -259,7 +328,7 @@ class PlaybookGraphView extends ItemView {
     }
 
     const radius = Number(settings.projectionRadius) || 1;
-    const dimension = Number(settings.sourceDimensions) || 768;
+    const dimension = normalizeSourceDimensions(settings.sourceDimensions);
 
     if (settings.useGemini && String(settings.geminiApiKey || "").trim()) {
       try {
@@ -290,8 +359,8 @@ class PlaybookGraphView extends ItemView {
 
     this.setStatus("Axes");
     for (const axis of AXES) {
-      const positive = await this.getGeminiEmbedding(axis.positive, `axis:${axis.id}:positive`, model, dimension);
-      const negative = await this.getGeminiEmbedding(axis.negative, `axis:${axis.id}:negative`, model, dimension);
+      const positive = await this.getGeminiAxisEmbedding(axis.id, "positive", axis.positive, model, dimension);
+      const negative = await this.getGeminiAxisEmbedding(axis.id, "negative", axis.negative, model, dimension);
       axisVectors.push(normalize(positive.map((value, index) => value - negative[index])));
     }
 
@@ -299,21 +368,133 @@ class PlaybookGraphView extends ItemView {
     for (let index = 0; index < documents.length; index += 1) {
       const doc = documents[index];
       this.setStatus(`Gemini ${index + 1}/${documents.length}`);
-      const vector = await this.getGeminiEmbedding(doc.text, `doc:${doc.path}`, model, dimension);
-      items.push({ doc, index, vector });
+      const cached = await this.getGeminiFileEmbedding(doc, model, dimension);
+      items.push({ doc, index, vector: cached.vector, cacheKey: cached.cacheKey });
     }
 
-    await this.plugin.saveSettings({ refresh: false });
-    return projectVectorItems(items, axisVectors, radius);
+    const projected = projectVectorItems(items, axisVectors, radius);
+    await this.writeProjectionRecords(projected, items, model, dimension);
+    return projected;
   }
 
-  async getGeminiEmbedding(text, cacheKeyHint, model, dimension) {
-    const settings = this.plugin.settings;
-    const apiKey = String(settings.geminiApiKey || "").trim();
-    const fingerprint = `${model}:${dimension}:${cacheKeyHint}:${hash32(text)}:${String(text).length}`;
-    const cached = settings.geminiCache[fingerprint];
-    if (Array.isArray(cached) && cached.length === dimension) return cached;
+  async getGeminiAxisEmbedding(axisId, polarity, text, model, dimension) {
+    const cacheKey = axisEmbeddingCacheKey(axisId, polarity, "gemini", model, dimension);
+    const existing = await this.plugin.readIndexJson(cacheKey.path);
+    const contentHash = hashText(text);
 
+    if (isUsableEmbeddingRecord(existing, "gemini", model, dimension, contentHash)) {
+      return normalize(existing.embedding.map(Number));
+    }
+
+    const nowIso = new Date().toISOString();
+    const vector = await this.requestGeminiEmbedding(text, model, dimension);
+    await this.plugin.writeIndexJson(cacheKey.path, {
+      schemaVersion: EMBEDDING_RECORD_SCHEMA_VERSION,
+      kind: "axis",
+      axisId,
+      polarity,
+      provider: "gemini",
+      model,
+      dimensions: dimension,
+      contentHash,
+      embeddedContentHash: contentHash,
+      lastRefreshedAt: nowIso,
+      updatedAt: nowIso,
+      embedding: vector,
+    });
+
+    return vector;
+  }
+
+  async getGeminiFileEmbedding(doc, model, dimension) {
+    const cacheKey = fileEmbeddingCacheKey(doc.path, "gemini", model, dimension);
+    const existing = await this.plugin.readIndexJson(cacheKey.path);
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    const meta = {
+      path: doc.path,
+      fileCreatedAt: doc.fileCreatedAt || nowIso,
+      fileModifiedAt: doc.fileModifiedAt || nowIso,
+      contentHash: doc.contentHash || hashText(doc.text),
+      provider: "gemini",
+      model,
+      dimensions: dimension,
+      nowMs,
+    };
+    let decision = shouldRefreshEmbeddingRecord(existing, meta);
+    if (!decision.refresh && (!Array.isArray(existing.embedding) || existing.embedding.length !== dimension)) {
+      decision = { refresh: true, reason: "embedding_vector_dimension_mismatch" };
+    }
+
+    if (!decision.refresh) {
+      const record = createEmbeddingRecord(existing, doc, meta, decision, {
+        embedding: existing.embedding,
+        embeddedContentHash: existing.embeddedContentHash || existing.contentHash,
+        lastRefreshedAt: existing.lastRefreshedAt,
+      });
+      await this.plugin.writeIndexJson(cacheKey.path, record);
+      return { cacheKey, vector: normalize(existing.embedding.map(Number)) };
+    }
+
+    try {
+      const vector = await this.requestGeminiEmbedding(doc.text, model, dimension);
+      const record = createEmbeddingRecord(existing, doc, meta, decision, {
+        embedding: vector,
+        embeddedContentHash: meta.contentHash,
+        lastRefreshedAt: nowIso,
+        lastRefreshErrorAt: null,
+        lastRefreshError: null,
+      });
+      await this.plugin.writeIndexJson(cacheKey.path, record);
+      return { cacheKey, vector };
+    } catch (error) {
+      if (existing && Array.isArray(existing.embedding) && existing.embedding.length === dimension) {
+        const record = createEmbeddingRecord(existing, doc, meta, decision, {
+          embedding: existing.embedding,
+          embeddedContentHash: existing.embeddedContentHash || existing.contentHash,
+          lastRefreshedAt: existing.lastRefreshedAt,
+          lastRefreshErrorAt: nowIso,
+          lastRefreshError: String(error && error.message ? error.message : error).slice(0, 300),
+        });
+        await this.plugin.writeIndexJson(cacheKey.path, record);
+        return { cacheKey, vector: normalize(existing.embedding.map(Number)) };
+      }
+
+      throw error;
+    }
+  }
+
+  async writeProjectionRecords(projected, items, model, dimension) {
+    const byPath = new Map(projected.map((point) => [point.path, point]));
+
+    for (const item of items) {
+      if (!item.cacheKey) continue;
+      const point = byPath.get(item.doc.path);
+      if (!point) continue;
+
+      const existing = await this.plugin.readIndexJson(item.cacheKey.path);
+      if (!existing) continue;
+
+      const nowIso = new Date().toISOString();
+      await this.plugin.writeIndexJson(item.cacheKey.path, {
+        ...existing,
+        provider: "gemini",
+        model,
+        dimensions: dimension,
+        projection8d: point.dims,
+        visual: {
+          position: point.position,
+          color: point.color,
+          light: point.dims[6],
+          bloom: point.dims[7],
+        },
+        updatedAt: nowIso,
+      });
+    }
+  }
+
+  async requestGeminiEmbedding(text, model, dimension) {
+    const apiKey = String(this.plugin.settings.geminiApiKey || "").trim();
     const response = await requestUrl({
       url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent`,
       method: "POST",
@@ -326,7 +507,7 @@ class PlaybookGraphView extends ItemView {
         content: {
           parts: [{ text: String(text).slice(0, this.plugin.settings.maxCharactersPerFile) }],
         },
-        output_dimensionality: dimension,
+        outputDimensionality: dimension,
       }),
     });
 
@@ -337,10 +518,11 @@ class PlaybookGraphView extends ItemView {
     const payload = response.json || JSON.parse(response.text);
     const values = extractGeminiEmbeddingValues(payload);
     if (!Array.isArray(values) || values.length === 0) throw new Error("Gemini response did not contain embedding values.");
+    if (values.length !== dimension) {
+      throw new Error(`Gemini returned ${values.length} dimensions, expected ${dimension}.`);
+    }
 
-    const normalized = normalize(values.map(Number));
-    settings.geminiCache[fingerprint] = normalized;
-    return normalized;
+    return normalize(values.map(Number));
   }
 
   getCandidateFiles() {
@@ -596,7 +778,7 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Source dimensions")
-          .setDesc("Source-vector dimensionality before projection to the 8D visual contract. Gemini mode should usually stay at 768D.")
+      .setDesc("Source-vector dimensionality before projection to the 8D visual contract. Gemini mode should usually stay at 768D.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("768", "768D")
@@ -649,13 +831,18 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Clear Gemini cache")
-      .setDesc("Removes locally cached embedding vectors. The API key is kept.")
+      .setName("Clear embedding index")
+      .setDesc("Removes locally cached embedding records and projections. The API key is kept.")
       .addButton((button) =>
         button.setButtonText("Clear cache").onClick(async () => {
-          this.plugin.settings.geminiCache = {};
-          await this.plugin.saveSettings({ refresh: true });
-          new Notice("Playbook Graph Gemini cache cleared.");
+          try {
+            await this.plugin.clearEmbeddingIndex();
+            this.plugin.refreshVisibleViews();
+            new Notice("Playbook Graph embedding index cleared.");
+          } catch (error) {
+            console.warn("Playbook Graph could not clear embedding index", error);
+            new Notice("Could not clear the embedding index on this adapter.");
+          }
         })
       );
 
@@ -677,12 +864,147 @@ function normalizeFolder(value) {
     .replace(/\/+$/, "");
 }
 
+function normalizeVaultPath(value) {
+  return String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/\/+$/, "");
+}
+
+function normalizeSourceDimensions(value) {
+  const dimension = Number(value);
+  return GEMINI_SOURCE_DIMENSIONS.includes(dimension) ? dimension : 768;
+}
+
 function normalizeGeminiModel(value) {
   const model = String(value || DEFAULT_SETTINGS.geminiModel)
     .trim()
     .replace(/^models\//, "");
   if (model === "gemini-embedding-001") return model;
   return "gemini-embedding-2";
+}
+
+function fileEmbeddingCacheKey(filePath, provider, model, dimensions) {
+  const dimension = normalizeSourceDimensions(dimensions);
+  const id = hashHex(["file", provider, model, dimension, normalizeVaultPath(filePath)].join("\n"));
+  return {
+    id,
+    path: `index/files/${id.slice(0, 2)}/${id}.json`,
+  };
+}
+
+function axisEmbeddingCacheKey(axisId, polarity, provider, model, dimensions) {
+  const dimension = normalizeSourceDimensions(dimensions);
+  const id = hashHex(["axis", provider, model, dimension, axisId, polarity].join("\n"));
+  return {
+    id,
+    path: `index/axes/${id.slice(0, 2)}/${id}.json`,
+  };
+}
+
+function shouldRefreshEmbeddingRecord(record, meta) {
+  if (!record) return { refresh: true, reason: "missing_record" };
+  if (!Array.isArray(record.embedding)) return { refresh: true, reason: "missing_embedding" };
+
+  const expectedDimensions = normalizeSourceDimensions(meta.dimensions);
+  if (
+    record.provider !== meta.provider ||
+    record.model !== meta.model ||
+    Number(record.dimensions) !== expectedDimensions
+  ) {
+    return { refresh: true, reason: "embedding_config_changed" };
+  }
+
+  const embeddedContentHash = record.embeddedContentHash || record.contentHash;
+  if (embeddedContentHash === meta.contentHash) return { refresh: false, reason: "unchanged" };
+
+  const nowMs = Number.isFinite(meta.nowMs) ? meta.nowMs : Date.now();
+  const sweepStartedMs =
+    dateMs(record.twentyFourHourSweepStartedAt) || dateMs(record.firstSeenAt) || dateMs(meta.fileCreatedAt) || nowMs;
+  const lastRefreshMs = dateMs(record.lastRefreshedAt);
+
+  if (nowMs - sweepStartedMs < DAY_MS) {
+    if (!lastRefreshMs || nowMs - lastRefreshMs >= HOUR_MS) {
+      return { refresh: true, reason: "hot_window_hour_elapsed" };
+    }
+
+    return {
+      refresh: false,
+      reason: "hot_window_wait",
+      nextRefreshAfter: new Date(lastRefreshMs + HOUR_MS).toISOString(),
+    };
+  }
+
+  if (!lastRefreshMs || nowMs - lastRefreshMs >= SEVEN_DAYS_MS) {
+    return { refresh: true, reason: "seven_days_elapsed" };
+  }
+
+  return {
+    refresh: false,
+    reason: "seven_day_wait",
+    nextRefreshAfter: new Date(lastRefreshMs + SEVEN_DAYS_MS).toISOString(),
+  };
+}
+
+function createEmbeddingRecord(existing, doc, meta, decision, overrides) {
+  const nowMs = Number.isFinite(meta.nowMs) ? meta.nowMs : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const previousContentHash = existing && existing.contentHash;
+  const firstSeenAt = (existing && existing.firstSeenAt) || nowIso;
+  const twentyFourHourSweepStartedAt =
+    (existing && existing.twentyFourHourSweepStartedAt) || (existing && existing.firstSeenAt) || meta.fileCreatedAt || nowIso;
+  const lastChangedAt =
+    !existing || previousContentHash !== meta.contentHash ? nowIso : existing.lastChangedAt || nowIso;
+  const lastRefreshedAt = overrides.lastRefreshedAt || (existing && existing.lastRefreshedAt) || null;
+
+  return {
+    ...(existing || {}),
+    ...overrides,
+    schemaVersion: EMBEDDING_RECORD_SCHEMA_VERSION,
+    kind: "file",
+    path: doc.path,
+    title: doc.title,
+    fileCreatedAt: meta.fileCreatedAt,
+    fileModifiedAt: meta.fileModifiedAt,
+    size: doc.size || 0,
+    firstSeenAt,
+    twentyFourHourSweepStartedAt,
+    contentHash: meta.contentHash,
+    lastChangedAt,
+    lastScannedAt: nowIso,
+    lastRefreshedAt,
+    provider: meta.provider,
+    model: meta.model,
+    dimensions: normalizeSourceDimensions(meta.dimensions),
+    refreshPolicyReason: decision.reason,
+    nextRefreshAfter: decision.nextRefreshAfter || null,
+    stats: {
+      timeSinceTwentyFourHourSweepStartedMs: millisecondsSince(twentyFourHourSweepStartedAt, nowMs),
+      timeSinceLastRefreshMs: lastRefreshedAt ? millisecondsSince(lastRefreshedAt, nowMs) : null,
+    },
+    updatedAt: nowIso,
+  };
+}
+
+function isUsableEmbeddingRecord(record, provider, model, dimensions, contentHash) {
+  const dimension = normalizeSourceDimensions(dimensions);
+  if (!record || !Array.isArray(record.embedding) || record.embedding.length !== dimension) return false;
+  if (record.provider !== provider || record.model !== model || Number(record.dimensions) !== dimension) return false;
+  return (record.embeddedContentHash || record.contentHash) === contentHash;
+}
+
+function millisecondsSince(isoValue, nowMs) {
+  const startedMs = dateMs(isoValue);
+  return startedMs ? Math.max(0, nowMs - startedMs) : null;
+}
+
+function dateMs(value) {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isoFromMs(value) {
+  return Number.isFinite(value) ? new Date(value).toISOString() : null;
 }
 
 function extractGeminiEmbeddingValues(payload) {
@@ -830,6 +1152,16 @@ function scoreKeywords(text, words) {
   return needles.length ? hits / needles.length : 0;
 }
 
+function hashText(input) {
+  return `fnv1a:${hashHex(String(input || ""))}`;
+}
+
+function hashHex(input) {
+  const text = String(input || "");
+  const reversed = text.split("").reverse().join("");
+  return `${hash32(text).toString(16).padStart(8, "0")}${hash32(`${text.length}:${reversed}`).toString(16).padStart(8, "0")}`;
+}
+
 function hash32(input) {
   let hash = 2166136261;
   for (let i = 0; i < input.length; i += 1) {
@@ -902,3 +1234,9 @@ function darken(color, amount) {
   const mix = (value) => Math.round(value * (1 - amount));
   return `rgb(${mix(color.r)}, ${mix(color.g)}, ${mix(color.b)})`;
 }
+
+module.exports.__test = {
+  createEmbeddingRecord,
+  fileEmbeddingCacheKey,
+  shouldRefreshEmbeddingRecord,
+};
