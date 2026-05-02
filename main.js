@@ -1,4 +1,4 @@
-const { ItemView, Notice, Plugin, PluginSettingTab, requestUrl, Setting, TFile } = require("obsidian");
+const { ItemView, Notice, Plugin, PluginSettingTab, requestUrl, Setting, setIcon, TFile } = require("obsidian");
 
 const VIEW_TYPE = "playbook-graph-view";
 const EMBEDDING_RECORD_SCHEMA_VERSION = 1;
@@ -54,6 +54,28 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-playbook-graph-settings",
+      name: "Open Playbook Graph Settings",
+      callback: () => this.openPluginSettings(),
+    });
+
+    this.addCommand({
+      id: "clear-current-dimension-embedding-cache",
+      name: "Clear Current Dimension Embedding Cache",
+      callback: async () => {
+        const dimension = normalizeSourceDimensions(this.settings.sourceDimensions);
+        try {
+          const removed = await this.clearEmbeddingIndexForDimension(dimension);
+          this.refreshVisibleViews();
+          new Notice(`Cleared ${removed} cached records for ${dimension}D.`);
+        } catch (error) {
+          console.warn("Playbook Graph could not clear embedding dimension", error);
+          new Notice("Could not clear that embedding dimension on this adapter.");
+        }
+      },
+    });
+
+    this.addCommand({
       id: "clear-gemini-embedding-cache",
       name: "Clear Gemini Embedding Cache",
       callback: async () => {
@@ -103,6 +125,17 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
     const leaf = this.app.workspace.getRightLeaf(false) || this.app.workspace.getLeaf(true);
     await leaf.setViewState({ type: VIEW_TYPE, active: true });
     await this.app.workspace.revealLeaf(leaf);
+  }
+
+  openPluginSettings() {
+    const settings = this.app.setting;
+    if (settings && typeof settings.open === "function") {
+      settings.open();
+      if (typeof settings.openTabById === "function") settings.openTabById(this.manifest.id);
+      return;
+    }
+
+    new Notice("Open Settings, then select Playbook Graph.");
   }
 
   async loadSettings() {
@@ -172,6 +205,35 @@ module.exports = class PlaybookGraphPlugin extends Plugin {
     await adapter.rmdir(indexPath, true);
   }
 
+  async clearEmbeddingIndexForDimension(dimension) {
+    const adapter = this.app.vault.adapter;
+    if (typeof adapter.list !== "function" || typeof adapter.remove !== "function") {
+      throw new Error("This Obsidian adapter does not support dimension cache cleanup.");
+    }
+
+    const roots = [this.getIndexPath("index/files"), this.getIndexPath("index/axes")];
+    let removed = 0;
+
+    for (const root of roots) {
+      if (!(await adapter.exists(root))) continue;
+
+      const files = await collectAdapterJsonFiles(adapter, root);
+      for (const file of files) {
+        try {
+          const record = JSON.parse(await adapter.read(file));
+          if (!shouldClearEmbeddingRecordForDimension(record, dimension)) continue;
+
+          await adapter.remove(file);
+          removed += 1;
+        } catch (error) {
+          console.warn("Playbook Graph skipped cache file during dimension cleanup", file, error);
+        }
+      }
+    }
+
+    return removed;
+  }
+
   refreshVisibleViewsDebounced() {
     window.clearTimeout(this.refreshTimer);
     this.refreshTimer = window.setTimeout(() => this.refreshVisibleViews(), 800);
@@ -220,7 +282,10 @@ class PlaybookGraphView extends ItemView {
         <canvas class="playbook-graph-canvas" aria-label="Playbook Graph"></canvas>
         <div class="playbook-graph-hud">
           <div class="playbook-graph-kicker">8D note projection</div>
-          <div class="playbook-graph-title">Playbook Graph</div>
+          <div class="playbook-graph-title-row">
+            <div class="playbook-graph-title">Playbook Graph</div>
+            <button class="playbook-graph-settings" type="button" aria-label="Open Playbook Graph settings" title="Settings"></button>
+          </div>
           <div class="playbook-graph-controls">
             <button class="playbook-graph-rescan" type="button">Rescan</button>
             <select class="playbook-graph-dimensions" aria-label="Source dimensions">
@@ -263,8 +328,11 @@ class PlaybookGraphView extends ItemView {
     this.dimsEl = root.querySelector(".playbook-graph-dims");
     this.dimensionSelect = root.querySelector(".playbook-graph-dimensions");
     this.dimensionSelect.value = String(this.plugin.settings.sourceDimensions);
+    this.settingsButton = root.querySelector(".playbook-graph-settings");
+    setIcon(this.settingsButton, "settings");
 
     this.registerDomEvent(root.querySelector(".playbook-graph-rescan"), "click", () => this.scheduleLoad());
+    this.registerDomEvent(this.settingsButton, "click", () => this.plugin.openPluginSettings());
     this.registerDomEvent(this.dimensionSelect, "change", async () => {
       this.plugin.settings.sourceDimensions = Number(this.dimensionSelect.value);
       await this.plugin.saveSettings();
@@ -329,6 +397,7 @@ class PlaybookGraphView extends ItemView {
 
     const radius = Number(settings.projectionRadius) || 1;
     const dimension = normalizeSourceDimensions(settings.sourceDimensions);
+    if (this.dimensionSelect) this.dimensionSelect.value = String(dimension);
 
     if (settings.useGemini && String(settings.geminiApiKey || "").trim()) {
       try {
@@ -734,6 +803,9 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
 
   display() {
     const { containerEl } = this;
+    let cacheClearDimension = normalizeSourceDimensions(this.plugin.settings.sourceDimensions);
+    let cacheClearButton = null;
+
     containerEl.replaceChildren();
     containerEl.createEl("h2", { text: "Playbook Graph" });
 
@@ -803,17 +875,30 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Gemini API key")
-      .setDesc("Stored locally by Obsidian in this plugin's data.json. Never commit this value.")
+      .setDesc("Stored in local plugin data.json, masked in settings, and never written to embedding cache records.")
       .addText((text) => {
+        const mask = "****************";
         text.inputEl.type = "password";
+        text.inputEl.autocomplete = "off";
+        text.inputEl.addEventListener("focus", () => {
+          if (text.inputEl.value === mask) text.setValue("");
+        });
         return text
-          .setPlaceholder("AIza...")
-          .setValue(this.plugin.settings.geminiApiKey ? "****************" : "")
+          .setPlaceholder("Paste key")
+          .setValue(this.plugin.settings.geminiApiKey ? mask : "")
           .onChange(async (value) => {
             if (/^\*+$/.test(value)) return;
             this.plugin.settings.geminiApiKey = value.trim();
             await this.plugin.saveSettings({ refresh: false });
           });
+      })
+      .addButton((button) => {
+        return button.setButtonText("Forget key").onClick(async () => {
+          this.plugin.settings.geminiApiKey = "";
+          await this.plugin.saveSettings({ refresh: false });
+          this.display();
+          new Notice("Gemini API key removed.");
+        });
       });
 
     new Setting(containerEl)
@@ -831,20 +916,33 @@ class PlaybookGraphSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Clear embedding index")
-      .setDesc("Removes locally cached embedding records and projections. The API key is kept.")
-      .addButton((button) =>
-        button.setButtonText("Clear cache").onClick(async () => {
+      .setName("Clear embedding cache")
+      .setDesc("Removes cached embedding records for one source-vector dimension. The API key is kept.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("768", "768D")
+          .addOption("1536", "1536D")
+          .addOption("3072", "3072D")
+          .setValue(String(cacheClearDimension))
+          .onChange((value) => {
+            cacheClearDimension = normalizeSourceDimensions(value);
+            if (cacheClearButton) cacheClearButton.setButtonText(`Clear ${cacheClearDimension}D`);
+          })
+      )
+      .addButton((button) => {
+        cacheClearButton = button;
+        return button.setButtonText(`Clear ${cacheClearDimension}D`).onClick(async () => {
           try {
-            await this.plugin.clearEmbeddingIndex();
+            const removed = await this.plugin.clearEmbeddingIndexForDimension(cacheClearDimension);
             this.plugin.refreshVisibleViews();
-            new Notice("Playbook Graph embedding index cleared.");
+            new Notice(`Cleared ${removed} cached records for ${cacheClearDimension}D.`);
           } catch (error) {
-            console.warn("Playbook Graph could not clear embedding index", error);
-            new Notice("Could not clear the embedding index on this adapter.");
+            console.warn("Playbook Graph could not clear embedding dimension", error);
+            new Notice("Could not clear that embedding dimension on this adapter.");
           }
-        })
-      );
+          return undefined;
+        });
+      });
 
     new Setting(containerEl)
       .setName("Auto rotate")
@@ -946,6 +1044,11 @@ function shouldRefreshEmbeddingRecord(record, meta) {
   };
 }
 
+function shouldClearEmbeddingRecordForDimension(record, dimension) {
+  if (!record) return false;
+  return Number(record.dimensions) === normalizeSourceDimensions(dimension);
+}
+
 function createEmbeddingRecord(existing, doc, meta, decision, overrides) {
   const nowMs = Number.isFinite(meta.nowMs) ? meta.nowMs : Date.now();
   const nowIso = new Date(nowMs).toISOString();
@@ -1005,6 +1108,21 @@ function dateMs(value) {
 
 function isoFromMs(value) {
   return Number.isFinite(value) ? new Date(value).toISOString() : null;
+}
+
+async function collectAdapterJsonFiles(adapter, folderPath) {
+  const files = [];
+  const listing = await adapter.list(folderPath);
+
+  for (const file of listing.files || []) {
+    if (String(file).endsWith(".json")) files.push(normalizeVaultPath(file));
+  }
+
+  for (const folder of listing.folders || []) {
+    files.push(...(await collectAdapterJsonFiles(adapter, folder)));
+  }
+
+  return files;
 }
 
 function extractGeminiEmbeddingValues(payload) {
@@ -1238,5 +1356,6 @@ function darken(color, amount) {
 module.exports.__test = {
   createEmbeddingRecord,
   fileEmbeddingCacheKey,
+  shouldClearEmbeddingRecordForDimension,
   shouldRefreshEmbeddingRecord,
 };

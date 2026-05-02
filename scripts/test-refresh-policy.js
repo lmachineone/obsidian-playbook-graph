@@ -17,6 +17,7 @@ const sandbox = {
     if (id === "obsidian") {
       return {
         ItemView: FakeBase,
+        Modal: FakeBase,
         Notice: FakeBase,
         Plugin: FakeBase,
         PluginSettingTab: FakeBase,
@@ -24,6 +25,7 @@ const sandbox = {
           throw new Error("requestUrl should not be called by refresh-policy tests");
         },
         Setting: FakeSetting,
+        setIcon() {},
         TFile: FakeBase,
       };
     }
@@ -40,6 +42,7 @@ vm.runInNewContext(source, sandbox, { filename: "main.js" });
 const policy = sandbox.module.exports.__test;
 assert.ok(policy, "main.js must expose pure policy helpers under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
+assert.ok(policy.shouldClearEmbeddingRecordForDimension, "main.js must expose dimension clear helper under __test");
 
 const base = Date.parse("2026-05-02T00:00:00.000Z");
 const oneHour = 60 * 60 * 1000;
@@ -173,6 +176,13 @@ function record(overrides = {}) {
   assert.equal(built.embeddedContentHash, "hash:new");
   assert.equal(built.stats.timeSinceTwentyFourHourSweepStartedMs, oneHour);
   assert.equal(built.stats.timeSinceLastRefreshMs, 0);
+}
+
+{
+  assert.equal(policy.shouldClearEmbeddingRecordForDimension(record({ dimensions: 768 }), 768), true);
+  assert.equal(policy.shouldClearEmbeddingRecordForDimension(record({ dimensions: 1536 }), 768), false);
+  assert.equal(policy.shouldClearEmbeddingRecordForDimension({ dimensions: "768" }, 768), true);
+  assert.equal(policy.shouldClearEmbeddingRecordForDimension(null, 768), false);
 }
 
 console.log("refresh policy tests passed");

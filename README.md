@@ -42,6 +42,8 @@ Then in Obsidian:
 5. Enable `Playbook Graph`.
 6. Run the command `Open Playbook Graph`.
 
+Open the cog inside the graph view, or use `Settings` -> `Community plugins` -> `Playbook Graph`, to configure Gemini and cache behavior.
+
 For local development before the GitHub repo exists, copy or symlink this folder:
 
 ```bash
@@ -56,8 +58,9 @@ ln -s /Users/hariseldon/dev/obsidian-playbook-graph "/path/to/Your Vault/.obsidi
 - `Max files`: caps the number of Markdown files scanned per render.
 - `Source dimensions`: switches the source-vector size between `768`, `1536`, and `3072`; Gemini mode should usually stay at `768`.
 - `Use Gemini API embeddings`: sends scanned Markdown note text to Gemini and renders the resulting projection.
-- `Gemini API key`: stored locally in Obsidian's plugin `data.json`; never commit it.
+- `Gemini API key`: stored in local Obsidian plugin `data.json`, masked in settings, and never written to embedding cache records.
 - `Gemini model`: first beta supports Gemini only, defaulting to `gemini-embedding-2`.
+- `Clear embedding cache`: removes cached embedding records for one selected source dimension.
 - `Auto rotate`: keeps the graph moving when idle.
 
 ## Embedding Storage
@@ -103,7 +106,7 @@ Keep the GitHub release tag exactly equal to the version in `manifest.json`, for
 
 Gemini mode sends the scanned Markdown text to the Gemini API. Keep `private_raw` excluded and scope `Scan folder` tightly when graphing private product playbooks.
 
-The API key is stored by Obsidian in local plugin data. It is not tracked by git, not included in releases, and not printed by this plugin.
+The API key is stored by Obsidian in local plugin data. It is not tracked by git, not included in releases, not printed by this plugin, and not copied into embedding cache files. Obsidian plugin data is local JSON rather than an encrypted keychain, so exclude plugin data from vault sync if key custody requires that.
 
 ## Future Direction
 

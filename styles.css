@@ -47,11 +47,47 @@
   text-transform: uppercase;
 }
 
+.playbook-graph-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .playbook-graph-title {
   margin-bottom: 12px;
   font-size: 22px;
   font-weight: 800;
   line-height: 1.08;
+}
+
+.playbook-graph-title-row .playbook-graph-title {
+  margin-bottom: 0;
+}
+
+.playbook-graph-settings {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(247, 244, 234, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f7f4ea;
+}
+
+.playbook-graph-settings:hover,
+.playbook-graph-settings:focus-visible {
+  border-color: rgba(123, 223, 242, 0.55);
+  background: rgba(123, 223, 242, 0.12);
+}
+
+.playbook-graph-settings svg {
+  width: 17px;
+  height: 17px;
 }
 
 .playbook-graph-controls {
