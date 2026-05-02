@@ -49,6 +49,8 @@ assert.ok(policy.calculatePanDelta, "main.js must expose drag pan helper under _
 assert.ok(policy.calculateWheelZoom, "main.js must expose wheel zoom helper under __test");
 assert.ok(policy.calculateLabelBoxAlpha, "main.js must expose label box alpha helper under __test");
 assert.ok(policy.calculateLabelVisibility, "main.js must expose label visibility helper under __test");
+assert.ok(policy.applyScreenSpaceRotation, "main.js must expose screen-space rotation helper under __test");
+assert.ok(policy.createEulerRotationMatrix, "main.js must expose Euler-to-matrix helper under __test");
 assert.ok(policy.projectPoint, "main.js must expose point projection helper under __test");
 assert.ok(policy.truncateLabelText, "main.js must expose label truncation helper under __test");
 assert.ok(policy.createEmbeddingRecord, "main.js must expose createEmbeddingRecord under __test");
@@ -91,6 +93,10 @@ function record(overrides = {}) {
     projection7d: [0, 0, 0, 0, 0, 0, 0],
     ...overrides,
   };
+}
+
+function rounded(value) {
+  return Number(value.toFixed(6));
 }
 
 {
@@ -215,6 +221,30 @@ function record(overrides = {}) {
   const delta = policy.calculateDragRotationDelta(10, 8);
   assert.equal(delta.y, 0.06);
   assert.equal(delta.x, 0.048);
+}
+
+{
+  const upsideDown = policy.createEulerRotationMatrix({ x: Math.PI, y: 0 });
+  const rotated = policy.applyScreenSpaceRotation(upsideDown, 10, 0);
+  const expectedSin = rounded(Math.sin(policy.calculateDragRotationDelta(10, 0).y));
+  assert.equal(rounded(rotated[2]), expectedSin);
+  assert.equal(rounded(rotated[6]), expectedSin);
+}
+
+{
+  const position = { x: 0.25, y: -0.4, z: 0.7 };
+  const eulerScreen = policy.projectPoint(position, { x: -0.48, y: 0.72 }, 200, 140, 1, { x: 0, y: 0 });
+  const matrixScreen = policy.projectPoint(
+    position,
+    policy.createEulerRotationMatrix({ x: -0.48, y: 0.72 }),
+    200,
+    140,
+    1,
+    { x: 0, y: 0 }
+  );
+  assert.equal(rounded(matrixScreen.x), rounded(eulerScreen.x));
+  assert.equal(rounded(matrixScreen.y), rounded(eulerScreen.y));
+  assert.equal(rounded(matrixScreen.depth), rounded(eulerScreen.depth));
 }
 
 {

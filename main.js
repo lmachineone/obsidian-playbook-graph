@@ -11,6 +11,8 @@ const VISUAL_DIMENSION_LABELS = ["x", "y", "z", "r", "g", "b", "light"];
 const DEFAULT_GRAPH_ZOOM = 1;
 const MIN_GRAPH_ZOOM = 0.45;
 const MAX_GRAPH_ZOOM = 2.8;
+const DRAG_ROTATION_SPEED = 0.006;
+const AUTO_ROTATE_RADIANS_PER_FRAME = 0.0013;
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 const NODE_MIN_SCREEN_SIZE = 3.5;
 const NODE_DEFAULT_MAX_SCREEN_SIZE = 9;
@@ -271,7 +273,7 @@ class PlaybookGraphView extends ItemView {
     this.links = [];
     this.pointer = { x: -9999, y: -9999 };
     this.hovered = null;
-    this.rotation = { x: -0.48, y: 0.72 };
+    this.rotation = createEulerRotationMatrix({ x: -0.48, y: 0.72 });
     this.pan = { x: 0, y: 0 };
     this.zoom = DEFAULT_GRAPH_ZOOM;
     this.animationFrame = 0;
@@ -680,9 +682,7 @@ class PlaybookGraphView extends ItemView {
         this.pan.x += delta.x;
         this.pan.y += delta.y;
       } else {
-        const delta = calculateDragRotationDelta(dx, dy);
-        this.rotation.y += delta.y;
-        this.rotation.x += delta.x;
+        this.rotation = applyScreenSpaceRotation(this.rotation, dx, dy);
       }
       this.lastDragPoint = { ...this.pointer };
     }
@@ -762,7 +762,7 @@ class PlaybookGraphView extends ItemView {
     this.animationFrame = requestAnimationFrame(() => this.renderLoop());
     if (!this.ctx) return;
     if (shouldAutoRotateNow(this.plugin.settings.autoRotate, this.lastMouseInteractionAt, Date.now())) {
-      this.rotation.y += 0.0013;
+      this.rotation = applyScreenSpaceRotationRadians(this.rotation, AUTO_ROTATE_RADIANS_PER_FRAME, 0);
     }
     this.draw();
   }
@@ -1166,9 +1166,23 @@ function shouldAutoRotateNow(autoRotate, lastMouseInteractionAt, nowMs) {
 
 function calculateDragRotationDelta(dx, dy) {
   return {
-    y: dx * 0.006,
-    x: dy * 0.006,
+    y: dx * DRAG_ROTATION_SPEED,
+    x: dy * DRAG_ROTATION_SPEED,
   };
+}
+
+function applyScreenSpaceRotation(rotation, dx, dy) {
+  const delta = calculateDragRotationDelta(dx, dy);
+  return applyScreenSpaceRotationRadians(rotation, delta.y, delta.x);
+}
+
+function applyScreenSpaceRotationRadians(rotation, yawRadians, pitchRadians) {
+  const base = resolveRotationMatrix(rotation);
+  const drag = multiplyRotationMatrices(
+    createPitchRotationMatrix(pitchRadians),
+    createYawRotationMatrix(yawRadians)
+  );
+  return multiplyRotationMatrices(drag, base);
 }
 
 function calculatePanDelta(dx, dy) {
@@ -1560,16 +1574,73 @@ function dot(a, b) {
   return sum;
 }
 
-function projectPoint(position, rotation, width, height, zoom = DEFAULT_GRAPH_ZOOM, pan = { x: 0, y: 0 }) {
-  const sinY = Math.sin(rotation.y);
-  const cosY = Math.cos(rotation.y);
-  const sinX = Math.sin(rotation.x);
-  const cosX = Math.cos(rotation.x);
+function createEulerRotationMatrix(rotation = {}) {
+  return multiplyRotationMatrices(
+    createPitchRotationMatrix(Number(rotation.x) || 0),
+    createYawRotationMatrix(Number(rotation.y) || 0)
+  );
+}
 
-  const x1 = position.x * cosY - position.z * sinY;
-  const z1 = position.x * sinY + position.z * cosY;
-  const y1 = position.y * cosX - z1 * sinX;
-  const z2 = position.y * sinX + z1 * cosX;
+function createYawRotationMatrix(angle) {
+  const sin = Math.sin(Number(angle) || 0);
+  const cos = Math.cos(Number(angle) || 0);
+  return [
+    cos, 0, -sin,
+    0, 1, 0,
+    sin, 0, cos,
+  ];
+}
+
+function createPitchRotationMatrix(angle) {
+  const sin = Math.sin(Number(angle) || 0);
+  const cos = Math.cos(Number(angle) || 0);
+  return [
+    1, 0, 0,
+    0, cos, -sin,
+    0, sin, cos,
+  ];
+}
+
+function resolveRotationMatrix(rotation) {
+  if (Array.isArray(rotation) && rotation.length === 9) {
+    return rotation.map((value, index) => {
+      const number = Number(value);
+      if (Number.isFinite(number)) return number;
+      return index % 4 === 0 ? 1 : 0;
+    });
+  }
+
+  return createEulerRotationMatrix(rotation);
+}
+
+function multiplyRotationMatrices(left, right) {
+  const result = Array(9).fill(0);
+  for (let row = 0; row < 3; row += 1) {
+    for (let column = 0; column < 3; column += 1) {
+      for (let inner = 0; inner < 3; inner += 1) {
+        result[row * 3 + column] += left[row * 3 + inner] * right[inner * 3 + column];
+      }
+    }
+  }
+  return result;
+}
+
+function applyRotationMatrix(matrix, position) {
+  const x = Number(position && position.x) || 0;
+  const y = Number(position && position.y) || 0;
+  const z = Number(position && position.z) || 0;
+  return {
+    x: matrix[0] * x + matrix[1] * y + matrix[2] * z,
+    y: matrix[3] * x + matrix[4] * y + matrix[5] * z,
+    z: matrix[6] * x + matrix[7] * y + matrix[8] * z,
+  };
+}
+
+function projectPoint(position, rotation, width, height, zoom = DEFAULT_GRAPH_ZOOM, pan = { x: 0, y: 0 }) {
+  const rotated = applyRotationMatrix(resolveRotationMatrix(rotation), position);
+  const x1 = rotated.x;
+  const y1 = rotated.y;
+  const z2 = rotated.z;
 
   const focal = 4.2;
   const scale = focal / (focal + z2 + 1.8);
@@ -1620,6 +1691,7 @@ function drawRoundedRect(ctx, x, y, width, height, radius) {
 
 module.exports.__test = {
   applyConnectionCounts,
+  applyScreenSpaceRotation,
   buildDocumentLinks,
   calculateLabelBoxAlpha,
   calculateLabelVisibility,
@@ -1627,6 +1699,7 @@ module.exports.__test = {
   calculateDragRotationDelta,
   calculatePanDelta,
   calculateWheelZoom,
+  createEulerRotationMatrix,
   createEmbeddingRecord,
   fileEmbeddingCacheKey,
   getVisualDimensionLabels,
